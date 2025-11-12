@@ -53,6 +53,7 @@ void setup() {
     targetAngle[i]  = NEUTRAL_ANGLE;
     pendingWrite[i] = true;
     writeServoAngle(SERVO_CHANNELS[i], NEUTRAL_ANGLE);
+    pendingWrite[i] = false;
   }
 
   Serial.println("PCA9685 multi-servo controller ready.");
@@ -68,64 +69,50 @@ void loop() {
   if (Serial.available() > 0) {
     String line = Serial.readStringUntil('\n');
     line.trim();
-    if (line.length()) {
+    if (line.length()) 
+    {
       // Lowercase for easy keyword matching
-      String lower = line; lower.toLowerCase();
+      // String lower = line; lower.toLowerCase();
 
       // Handle "neutral"
-      if (lower == "neutral") {
-        for (uint8_t i = 0; i < NUM_SERVOS; ++i) {
-          targetAngle[i]  = NEUTRAL_ANGLE;
-          pendingWrite[i] = true;
-        }
-        Serial.println("All servos -> NEUTRAL (60°)");
-      }
-      // Handle "all <angle>"
-      else if (lower.startsWith("all")) {
-        int space = lower.indexOf(' ');
-        if (space > 0) {
-          int ang = lower.substring(space + 1).toInt();
-          if (ang >= MIN_ANGLE && ang <= MAX_ANGLE) {
-            for (uint8_t i = 0; i < NUM_SERVOS; ++i) {
-              targetAngle[i]  = ang;
-              pendingWrite[i] = true;
-            }
-            Serial.print("All servos -> ");
-            Serial.print(ang);
-            Serial.println("°");
-          } else {
-            Serial.print("Angle out of range (");
-            Serial.print(MIN_ANGLE); Serial.print("..");
-            Serial.print(MAX_ANGLE); Serial.println(").");
-          }
-        } else {
-          Serial.println("Usage: all <angle>");
-        }
-      }
-      // Handle "off <ch>" (stop PWM)
-      else if (lower.startsWith("off")) {
-        int space = lower.indexOf(' ');
-        if (space > 0) {
-          int ch = lower.substring(space + 1).toInt();
-          int idx = indexForChannel(ch);
-          if (idx >= 0) {
-            pwm.setPWM(ch, 0, 0); // disables pulses
-            Serial.print("Channel "); Serial.print(ch); Serial.println(" OFF");
-          } else {
-            Serial.println("Unknown channel for OFF.");
-          }
-        } else {
-          Serial.println("Usage: off <channel>");
-        }
-      }
-      // Handle "<ch> <angle>"
-      else {
-        // Accept formats: "2 15", "2,15", "2:15", "ch=2 ang=15"
+      // if (lower == "neutral") {
+      //   for (uint8_t i = 0; i < NUM_SERVOS; ++i) {
+      //     targetAngle[i]  = NEUTRAL_ANGLE;
+      //     pendingWrite[i] = true;
+      //   }
+      //   Serial.println("All servos -> NEUTRAL (60°)");
+      // }
+      // // Handle "all <angle>"
+      // else if (lower.startsWith("all")) {
+      //   int space = lower.indexOf(' ');
+      //   if (space > 0) {
+      //     int ang = lower.substring(space + 1).toInt();
+      //     if (ang >= MIN_ANGLE && ang <= MAX_ANGLE) {
+      //       for (uint8_t i = 0; i < NUM_SERVOS; ++i) {
+      //         targetAngle[i]  = ang;
+      //         pendingWrite[i] = true;
+      //       }
+      //       Serial.print("All servos -> ");
+      //       Serial.print(ang);
+      //       Serial.println("°");
+      //     } else {
+      //       Serial.print("Angle out of range (");
+      //       Serial.print(MIN_ANGLE); Serial.print("..");
+      //       Serial.print(MAX_ANGLE); Serial.println(").");
+      //     }
+      //   } else {
+      //     Serial.println("Usage: all <angle>");
+      //   }
+      // }
+      
+      // // Handle "<ch> <angle>"
+      // else {
+        // Accept format: "2 15"
         // Extract first integer as ch, second as angle
         int firstSep = -1;
         for (uint16_t i = 0; i < line.length(); ++i) {
           char c = line[i];
-          if (c == ' ' || c == ',' || c == ':' || c == '=') { firstSep = i; break; }
+          if (c == ' ') { firstSep = i; break; }
         }
 
         if (firstSep > 0) {
@@ -136,33 +123,40 @@ void loop() {
           // get angle = first integer in rest
           int angle = rest.toInt();
 
-          int idx = indexForChannel(ch);
-          if (idx < 0) {
-            Serial.print("Channel "); Serial.print(ch); Serial.println(" not in SERVO_CHANNELS.");
-          } else if (angle < MIN_ANGLE || angle > MAX_ANGLE) {
-            Serial.print("Angle out of range (");
-            Serial.print(MIN_ANGLE); Serial.print("..");
-            Serial.print(MAX_ANGLE); Serial.println(").");
-          } else {
-            targetAngle[idx]  = angle;
-            pendingWrite[idx] = true;
-            Serial.print("Ch "); Serial.print(ch);
-            Serial.print(" -> "); Serial.print(angle); Serial.println("°");
-          }
-        } else {
-          Serial.println("Invalid command. Try: <ch> <angle>");
-        }
-      }
+          // int idx = indexForChannel(ch);
+
+          writeServoAngle(ch, angle);
+
+
+          // if (idx < 0) {
+          //   // Serial.print("Channel "); Serial.print(ch); Serial.println(" not in SERVO_CHANNELS.");
+          // } else if (angle < MIN_ANGLE || angle > MAX_ANGLE) {
+          //   // Serial.print("Angle out of range (");
+          //   // Serial.print(MIN_ANGLE); Serial.print("..");
+          //   // Serial.print(MAX_ANGLE); Serial.println(").");
+          // } else {
+          //   targetAngle[idx]  = angle;
+          //   pendingWrite[idx] = true;
+          //   // Serial.print("Ch "); Serial.print(ch);
+          //   // Serial.print(" -> "); Serial.print(angle); Serial.println("°");
+          // }
+        } 
+        // else {
+        //   // Serial.println("Invalid command. Try: <ch> <angle>");
+        // }
+      // }
     }
   }
 
-  // ---- Apply any pending writes ----
-  for (uint8_t i = 0; i < NUM_SERVOS; ++i) {
-    if (pendingWrite[i]) {
-      writeServoAngle(SERVO_CHANNELS[i], targetAngle[i]);
-      pendingWrite[i] = false;
-    }
-  }
+  // // ---- Apply any pending writes ----
+  // for (uint8_t i = 0; i < NUM_SERVOS; ++i) {
+  //   if (pendingWrite[i]) {
+  //     writeServoAngle(SERVO_CHANNELS[i], targetAngle[i]);
+  //     pendingWrite[i] = false;
+  //     Serial.print("wrote to "); Serial.print(SERVO_CHANNELS[i]); Serial.print(" angle: "); Serial.println(targetAngle[i]);
+  //   }
+  // }
+
 
   delay(10);
 }
