@@ -40,8 +40,8 @@ class BallDetector:
                         frame_width = config.get('camera', {}).get('frame_width', 640)
                         self.scale_factor = config['calibration']['pixel_to_meter_ratio'] * (frame_width / 2)
                 
-                print(f"[BALL_DETECT] Loaded HSV bounds: {self.lower_hsv} to {self.upper_hsv}")
-                print(f"[BALL_DETECT] Scale factor: {self.scale_factor:.6f} m/normalized_unit")
+                # print(f"[BALL_DETECT] Loaded HSV bounds: {self.lower_hsv} to {self.upper_hsv}")
+                # print(f"[BALL_DETECT] Scale factor: {self.scale_factor:.6f} m/normalized_unit")
                 
             except Exception as e:
                 print(f"[BALL_DETECT] Config load error: {e}, using defaults")
@@ -166,7 +166,7 @@ def detect_ball_x(frame):
 def main():
     """Test ball detection with current config."""
     detector = BallDetector()
-    cap = cv2.VideoCapture(0)  # Use default camera
+    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)  # Use default camera
     
     print("Ball Detection Test")
     print("Press 'q' to quit")

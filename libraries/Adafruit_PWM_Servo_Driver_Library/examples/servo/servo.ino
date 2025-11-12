@@ -38,7 +38,7 @@ Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
 #define SERVO_FREQ 50 // Analog servos run at ~50 Hz updates
 
 // our servo # counter
-uint8_t servonum = 1;
+uint8_t servonum = 0;
 
 void setup() {
   Serial.begin(9600);

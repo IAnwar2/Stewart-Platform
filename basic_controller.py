@@ -1,4 +1,3 @@
-import sys
 import cv2
 import numpy as np
 import json
@@ -6,41 +5,9 @@ import serial
 import time
 import tkinter as tk
 from tkinter import ttk
-import matplotlib.pyplot as plt
 from threading import Thread
 import queue
 from ball_detection import detect_ball_x
-
-
-def open_camera(preferred_index=0, width=640, height=480):
-        # Pick a backend per OS
-        if sys.platform == "darwin":         # macOS
-            backends = [cv2.CAP_AVFOUNDATION, 0]   # AVFoundation, then default
-        elif sys.platform.startswith("win"): # Windows
-            backends = [cv2.CAP_DSHOW, 0]
-        else:                                # Linux
-            backends = [cv2.CAP_V4L2, 0]
-
-        # Try preferred index with backends
-        for be in backends:
-            cap = cv2.VideoCapture(preferred_index, be)
-            if cap.isOpened():
-                # set properties (best effort)
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                return cap
-
-        # Fallback: scan indices 0..6
-        for i in range(7):
-            for be in backends:
-                cap = cv2.VideoCapture(i, be)
-                if cap.isOpened():
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                    print(f"[CAM] Using index {i} with backend {be}")
-                    return cap
-
-        return None
 
 class BasicPIDController:
     def __init__(self, config_file="config.json"):
@@ -89,7 +56,8 @@ class BasicPIDController:
             servo_angle = self.neutral_angle + angle
             servo_angle = int(np.clip(servo_angle, 0, 30))
             try:
-                self.servo.write(bytes([servo_angle]))
+                print(f"start write ={2} {servo_angle}\n".encode('ascii'))
+                self.servo.write(f"{2} {servo_angle}\n".encode("ascii"))
             except Exception:
                 print("[SERVO] Send failed")
 
@@ -108,23 +76,14 @@ class BasicPIDController:
         self.prev_error = error
         # PID output (limit to safe beam range)
         output = P + I + D
-        output = np.clip(output, -15, 15)
+        output = np.clip(output, -30, 30)
         print(error)
         return output
 
     def camera_thread(self):
         """Dedicated thread for video capture and ball detection."""
-        # cap = cv2.VideoCapture(self.config['camera']['index'], cv2.CAP_DSHOW)
-
-        cap = open_camera(self.config['camera']['index'], self.config['camera']['frame_width'], self.config['camera']['frame_height'])
-        if not cap or not cap.isOpened():
-            print("[ERR] Could not open any camera. Check permissions and index.")
-            return
+        cap = cv2.VideoCapture(self.config['camera']['index'], cv2.CAP_DSHOW)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-         # Setup OpenCV window and mouse callback
-        
-
         while self.running:
             ret, frame = cap.read()
             if not ret:
@@ -161,8 +120,9 @@ class BasicPIDController:
                 position = self.position_queue.get(timeout=0.1)
                 # Compute control output using PID
                 control_output = self.update_pid(position)
+                print("update_pid finished")
                 # Send control command to servo (real or simulated)
-                self.send_servo_angle(control_output)
+                self.send_servo_angle(control_output) # Gets stuck after a while !!!!!!!!!!!!!
                 # Log results for plotting
                 current_time = time.time() - self.start_time
                 self.time_log.append(current_time)

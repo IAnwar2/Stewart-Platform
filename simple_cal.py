@@ -1,8 +1,7 @@
-# Simple Auto Calibration System for Ball and Platform Control
+# Simple Auto Calibration System for Ball and Beam Control
 # Interactive calibration tool for color detection, geometry, and servo limits
 # Generates config.json file for use with ball tracking controller
 
-import sys
 import cv2
 import numpy as np
 import json
@@ -11,47 +10,17 @@ import serial
 import time
 from datetime import datetime
 
-def open_camera(preferred_index=1, width=640, height=480):
-        # Pick a backend per OS
-        if sys.platform == "darwin":         # macOS
-            backends = [cv2.CAP_AVFOUNDATION, 0]   # AVFoundation, then default
-        elif sys.platform.startswith("win"): # Windows
-            backends = [cv2.CAP_DSHOW, 0]
-        else:                                # Linux
-            backends = [cv2.CAP_V4L2, 0]
-
-        # Try preferred index with backends
-        for be in backends:
-            cap = cv2.VideoCapture(preferred_index, be)
-            if cap.isOpened():
-                # set properties (best effort)
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                return cap
-
-        # Fallback: scan indices 0..6
-        for i in range(7):
-            for be in backends:
-                cap = cv2.VideoCapture(i, be)
-                if cap.isOpened():
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                    print(f"[CAM] Using index {i} with backend {be}")
-                    return cap
-
-        return None
-
 class SimpleAutoCalibrator:
-    """Interactive calibration system for ball and platform control setup."""
+    """Interactive calibration system for ball and beam control setup."""
     
     def __init__(self):
         """Initialize calibration parameters and default values."""
         # Physical system parameters
-        self.PLATFORM_RADIUS = 0.15  # Known platform radius in meters
+        self.BEAM_LENGTH_M = 0.2  # Known beam length in meters
         
         # Camera configuration
-        self.CAM_INDEX = 0  # Default camera index
-        self.FRAME_W, self.FRAME_H = 720, 720  # Frame dimensions
+        self.CAM_INDEX = 1  # Default camera index
+        self.FRAME_W, self.FRAME_H = 640, 480  # Frame dimensions
         
         # Calibration state tracking
         self.current_frame = None  # Current video frame
@@ -63,12 +32,12 @@ class SimpleAutoCalibrator:
         self.upper_hsv = None  # Upper HSV bound for ball detection
         
         # Geometry calibration data
-        self.peg_points = []  # platform endpoint pixel coordinates
+        self.peg_points = []  # Beam endpoint pixel coordinates
         self.pixel_to_meter_ratio = None  # Conversion ratio from pixels to meters
         
         # Servo hardware configuration
         self.servo = None  # Serial connection to servo
-        self.servo_port = "/dev/tty.usbmodem11101"  # Servo communication port
+        self.servo_port = "COM3"  # Servo communication port
         self.neutral_angle = 15  # Servo neutral position angle
         
         # Position limit results
@@ -90,20 +59,17 @@ class SimpleAutoCalibrator:
             print("[SERVO] Failed to connect - limits will be estimated")
             return False
 
-    def send_servo_angle(self, angle, channels=(1,2,3)):
+    def send_servo_angle(self, angle):
         """Send angle command to servo motor with safety clipping.
         
         Args:
             angle (float): Desired servo angle in degrees
         """
-        if not self.servo:
-            return
-        angle = int(np.clip(angle, 0, 30))
-        for ch in channels:
-            try:
-                self.servo.write(f"{ch} {angle}\n".encode("ascii"))
-            except Exception as e:
-                print(f"[SERVO] write error: {e}")
+        if self.servo:
+            # Clip angle to safe range and send as byte
+            angle = int(np.clip(angle, 0, 30))
+            self.servo.write(f"{2} {angle}\n".encode("ascii"))
+            # self.servo.write(bytes([angle]))
 
     def mouse_callback(self, event, x, y, flags, param):
         """Handle mouse click events for interactive calibration.
@@ -119,7 +85,7 @@ class SimpleAutoCalibrator:
                 # Color sampling phase - collect HSV samples at click point
                 self.sample_color(x, y)
             elif self.phase == "geometry" and len(self.peg_points) < 2:
-                # Geometry phase - collect platform coordinates
+                # Geometry phase - collect beam endpoint coordinates
                 self.peg_points.append((x, y))
                 print(f"[GEO] Peg {len(self.peg_points)} selected")
                 if len(self.peg_points) == 2:
@@ -171,14 +137,14 @@ class SimpleAutoCalibrator:
             print(f"[COLOR] Samples: {len(self.hsv_samples)}")
 
     def calculate_geometry(self):
-        """Calculate pixel-to-meter conversion ratio from platform coordinates."""
-        center, rim = self.peg_points
+        """Calculate pixel-to-meter conversion ratio from beam endpoint coordinates."""
+        p1, p2 = self.peg_points
         
-        # Calculate pixel distance between platform center and rim point
-        pixel_distance = math.sqrt((rim[0] - center[0])**2 + (rim[1] - center[1])**2)
+        # Calculate pixel distance between beam endpoints
+        pixel_distance = math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
         
-        # Convert to meters using known platform radius
-        self.pixel_to_meter_ratio = self.PLATFORM_RADIUS / pixel_distance
+        # Convert to meters using known beam length
+        self.pixel_to_meter_ratio = self.BEAM_LENGTH_M / pixel_distance
         print(f"[GEO] Pixel-to-meter ratio: {self.pixel_to_meter_ratio:.6f}")
         
         # Advance to limits calibration phase
@@ -220,8 +186,7 @@ class SimpleAutoCalibrator:
             return None
         
         # Convert pixel position to meters from center
-        # center_x = frame.shape[1] // 2
-        center_x = int(self.peg_points[0][0])
+        center_x = frame.shape[1] // 2
         pixel_offset = x - center_x
         meters_offset = pixel_offset * self.pixel_to_meter_ratio
         
@@ -231,8 +196,8 @@ class SimpleAutoCalibrator:
         """Use servo motor to automatically find ball position limits."""
         if not self.servo:
             # Estimate limits without servo if connection failed
-            self.position_min = -self.PLATFORM_RADIUS
-            self.position_max = self.PLATFORM_RADIUS
+            self.position_min = -self.BEAM_LENGTH_M / 2
+            self.position_max = self.BEAM_LENGTH_M / 2
             print("[LIMITS] Estimated without servo")
             return
         
@@ -275,13 +240,11 @@ class SimpleAutoCalibrator:
         else:
             print("[LIMITS] Failed to find limits")
 
-    
-
     def save_config(self):
         """Save all calibration results to config.json file."""
         config = {
             "timestamp": datetime.now().isoformat(),
-            "platform_radius_m": float(self.PLATFORM_RADIUS),
+            "beam_length_m": float(self.BEAM_LENGTH_M),
             "camera": {
                 "index": int(self.CAM_INDEX),
                 "frame_width": int(self.FRAME_W),
@@ -321,7 +284,7 @@ class SimpleAutoCalibrator:
         # Phase-specific instruction text
         phase_text = {
             "color": "Click on ball to sample colors. Press 'c' when done.",
-            "geometry": "Click on center and then rim (2 points)",
+            "geometry": "Click on beam endpoints (2 points)",
             "limits": "Press 'l' to find limits automatically",
             "complete": "Calibration complete! Press 's' to save"
         }
@@ -343,12 +306,9 @@ class SimpleAutoCalibrator:
             cv2.putText(overlay, f"Peg {i+1}", (peg[0]+10, peg[1]-10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         
-        # Draw circumference os the platform if geometry points are selected
-        # if len(self.peg_points) == 2:
-        if self.pixel_to_meter_ratio:
-            radius_px = int(round(self.PLATFORM_RADIUS / self.pixel_to_meter_ratio))
-            center_pt = (int(self.peg_points[0][0]), int(self.peg_points[0][1]))
-            cv2.circle(overlay, center_pt, radius_px, (255,0,0), 2)
+        # Draw line between beam endpoints if both are selected
+        if len(self.peg_points) == 2:
+            cv2.line(overlay, self.peg_points[0], self.peg_points[1], (255, 0, 0), 2)
         
         # Show real-time ball detection if color calibration is complete
         if self.lower_hsv:
@@ -390,17 +350,13 @@ class SimpleAutoCalibrator:
     def run(self):
         """Main calibration loop with interactive GUI."""
         # Initialize camera capture
-        # self.cap = cv2.VideoCapture(self.CAM_INDEX, cv2.CAP_DSHOW)
-        self.cap = open_camera(self.CAM_INDEX, self.FRAME_W, self.FRAME_H)
-        if not self.cap or not self.cap.isOpened():
-            print("[ERR] Could not open any camera. Check permissions and index.")
-            return
+        self.cap = cv2.VideoCapture(self.CAM_INDEX, cv2.CAP_DSHOW)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.FRAME_W)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.FRAME_H)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize latency
         
         # Setup OpenCV window and mouse callback
-        cv2.namedWindow("Auto Calibration", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("Auto Calibration")
         cv2.setMouseCallback("Auto Calibration", self.mouse_callback)
         
         # Attempt servo connection
@@ -409,20 +365,14 @@ class SimpleAutoCalibrator:
         # Display instructions
         print("[INFO] Simple Auto Calibration")
         print("Phase 1: Click on ball to sample colors, press 'c' when done")
-        print("Phase 2: Click on center point then rim")
+        print("Phase 2: Click on beam endpoints")
         print("Phase 3: Press 'l' to find limits")
         print("Press 's' to save, 'q' to quit")
         
         # Main calibration loop
         while True:
-            # ret, frame = self.cap.read()
-            # if not ret:
-            #     continue
             ret, frame = self.cap.read()
             if not ret:
-                cv2.imshow("Auto Calibration", np.zeros((self.FRAME_H, self.FRAME_W, 3), dtype=np.uint8))
-                if cv2.waitKey(1) & 0xFF == 27:  # ESC
-                    break
                 continue
             
             self.current_frame = frame
@@ -441,7 +391,7 @@ class SimpleAutoCalibrator:
                 # Complete color calibration phase
                 if self.hsv_samples:
                     self.phase = "geometry"
-                    print("[INFO] Color calibration complete. Click on platform center THEN rim.")
+                    print("[INFO] Color calibration complete. Click on beam endpoints.")
             elif key == ord('l') and self.phase == "limits":
                 # Start automatic limit finding
                 self.find_limits_automatically()
