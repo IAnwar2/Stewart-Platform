@@ -107,6 +107,10 @@ class SimpleAutoCalibrator:
 
         try:
             self.servo.write(f"2 {angle}\n".encode("ascii"))
+            response = self.servo.read_all().decode('ascii', errors='ignore')
+            print(f"Arduino replied: {response}")
+
+
         except Exception as e:
             print(f"[SERVO] write error: {e}")
 
@@ -416,6 +420,7 @@ class SimpleAutoCalibrator:
         # Display instructions
         print("[INFO] Simple Auto Calibration")
         print("Phase 1: Click on ball to sample colors, press 'c' when done")
+        
         print("Phase 2: Click on center point then rim")
         print("Phase 3: Press 'l' to find limits")
         print("Press 's' to save, 'q' to quit")

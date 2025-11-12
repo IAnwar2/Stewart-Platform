@@ -95,7 +95,9 @@ class BasicPIDController:
             try:
                 self.servo.write(f"2 {servo_angle}\n".encode("ascii"))
                 print(f"[SERVO] Sent angle: {servo_angle}")
-                self.servo.flush()
+                time.sleep(0.05)  # give Arduino time to respond
+                response = self.servo.read_all().decode('ascii', errors='ignore')
+                print(f"Arduino replied: {response}")
             except Exception as e:
                 print(f"[SERVO] write error: {e}")
             # try:
