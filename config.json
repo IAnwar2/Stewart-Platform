@@ -1,0 +1,30 @@
+{
+  "timestamp": "2025-11-11T19:14:33.652211",
+  "platform_radius_m": 0.15,
+  "camera": {
+    "index": 0,
+    "frame_width": 720,
+    "frame_height": 720
+  },
+  "ball_detection": {
+    "lower_hsv": [
+      7.0,
+      194.0,
+      136.60000610351562
+    ],
+    "upper_hsv": [
+      24.0,
+      255.0,
+      235.39999389648438
+    ]
+  },
+  "calibration": {
+    "pixel_to_meter_ratio": 0.00037633601219924195,
+    "position_min_m": -0.13692847545252468,
+    "position_max_m": 0.07070412829193258
+  },
+  "servo": {
+    "port": "/dev/tty.usbmodem1201",
+    "neutral_angle": 15
+  }
+}

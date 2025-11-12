@@ -70,6 +70,8 @@ class BasicPIDController:
         self.start_time = None
         # Thread-safe queue for most recent ball position measurement
         self.position_queue = queue.Queue(maxsize=1)
+        self.vis_q = queue.Queue(maxsize=1)
+
         self.running = False    # Main run flag for clean shutdown
 
     def connect_servo(self):
@@ -87,11 +89,19 @@ class BasicPIDController:
         """Send angle command to servo motor (clipped for safety)."""
         if self.servo:
             servo_angle = self.neutral_angle + angle
+
             servo_angle = int(np.clip(servo_angle, 0, 30))
+
             try:
-                self.servo.write(bytes([servo_angle]))
-            except Exception:
-                print("[SERVO] Send failed")
+                self.servo.write(f"2 {servo_angle}\n".encode("ascii"))
+                print(f"[SERVO] Sent angle: {servo_angle}")
+                self.servo.flush()
+            except Exception as e:
+                print(f"[SERVO] write error: {e}")
+            # try:
+            #     self.servo.write(bytes([servo_angle]))
+            # except Exception:
+            #     print("[SERVO] Send failed")
 
     def update_pid(self, position, dt=0.033):
         """Perform PID calculation and return control output."""
@@ -143,10 +153,18 @@ class BasicPIDController:
                 except Exception:
                     pass
             # Show processed video with overlays
-            cv2.imshow("Ball Tracking", vis_frame)
-            if cv2.waitKey(1) & 0xFF == 27:  # ESC exits
-                self.running = False
-                break
+            # cv2.imshow("Ball Tracking", vis_frame)
+            # if cv2.waitKey(1) & 0xFF == 27:  # ESC exits
+            #     self.running = False
+            #     break
+            try:
+                if self.vis_q.full():
+                    self.vis_q.get_nowait()
+                self.vis_q.put_nowait(vis_frame if vis_frame is not None else frame)
+            except Exception:
+                pass
+
+
         cap.release()
         cv2.destroyAllWindows()
 
@@ -291,10 +309,42 @@ class BasicPIDController:
         self.running = False
         # Try to safely close all windows/resources
         try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
+        try:
             self.root.quit()
             self.root.destroy()
         except Exception:
             pass
+
+    def start_display(self):
+        # Create the window on the main thread
+        cv2.namedWindow("Ball Tracking", cv2.WINDOW_NORMAL)
+        self._display_tick()
+
+    def _display_tick(self):
+        # Called on the main thread via Tk's .after()
+        if not self.running:
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
+            return
+
+        try:
+            vis = self.vis_q.get_nowait()
+        except queue.Empty:
+            vis = None
+
+        if vis is not None:
+            cv2.imshow("Ball Tracking", vis)
+            # keep GUI responsive; do NOT block
+            cv2.waitKey(1)
+
+        # schedule next update (≈60 fps -> ~16 ms)
+        self.root.after(16, self._display_tick)
+
 
     def run(self):
         """Entry point: starts threads, launches GUI mainloop."""
@@ -311,6 +361,10 @@ class BasicPIDController:
 
         # Build and run GUI in main thread
         self.create_gui()
+
+        # Start OpenCV display on the main thread (after GUI exists)
+        self.start_display()
+
         self.root.mainloop()
 
         # After GUI ends, stop everything

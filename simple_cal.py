@@ -68,7 +68,7 @@ class SimpleAutoCalibrator:
         
         # Servo hardware configuration
         self.servo = None  # Serial connection to servo
-        self.servo_port = "/dev/tty.usbmodem11101"  # Servo communication port
+        self.servo_port = "/dev/tty.usbmodem1201"  # Servo communication port
         self.neutral_angle = 15  # Servo neutral position angle
         
         # Position limit results
@@ -99,11 +99,16 @@ class SimpleAutoCalibrator:
         if not self.servo:
             return
         angle = int(np.clip(angle, 0, 30))
-        for ch in channels:
-            try:
-                self.servo.write(f"{ch} {angle}\n".encode("ascii"))
-            except Exception as e:
-                print(f"[SERVO] write error: {e}")
+        # for ch in channels:
+        #     try:
+        #         self.servo.write(f"{ch} {angle}\n".encode("ascii"))
+        #     except Exception as e:
+        #         print(f"[SERVO] write error: {e}")
+
+        try:
+            self.servo.write(f"2 {angle}\n".encode("ascii"))
+        except Exception as e:
+            print(f"[SERVO] write error: {e}")
 
     def mouse_callback(self, event, x, y, flags, param):
         """Handle mouse click events for interactive calibration.
@@ -147,7 +152,9 @@ class SimpleAutoCalibrator:
         
         # Update HSV bounds based on collected samples
         if self.hsv_samples:
-            samples = np.array(self.hsv_samples)
+            # samples = np.array(self.hsv_samples)
+            samples = np.array(self.hsv_samples, dtype=np.float32)
+
             
             # Calculate adaptive margins for each HSV channel
             h_margin = max(5, (np.max(samples[:, 0]) - np.min(samples[:, 0])) * 0.1)
@@ -220,8 +227,8 @@ class SimpleAutoCalibrator:
             return None
         
         # Convert pixel position to meters from center
-        # center_x = frame.shape[1] // 2
-        center_x = int(self.peg_points[0][0])
+        center_x = frame.shape[1] // 2
+        # center_x = int(self.peg_points[0][0])
         pixel_offset = x - center_x
         meters_offset = pixel_offset * self.pixel_to_meter_ratio
         
