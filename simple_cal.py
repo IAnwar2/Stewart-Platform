@@ -16,7 +16,12 @@ class SimpleAutoCalibrator:
     def __init__(self):
         """Initialize calibration parameters and default values."""
         # Physical system parameters
-        self.BEAM_LENGTH_M = 0.2  # Known beam length in meters
+        #self.BEAM_LENGTH_M = 0.2  # Known beam length in meters
+        self.PLATFORM_DIAMETER_M = 0.3 # Known platforum radius in meters
+
+        # Peg constants
+        self.MAX_PEG_POINTS = 3 # Note: Geometry is just used to find the pixel-meter ratio
+        self.center = None
         
         # Camera configuration
         self.CAM_INDEX = 1  # Default camera index
@@ -84,11 +89,11 @@ class SimpleAutoCalibrator:
             if self.phase == "color":
                 # Color sampling phase - collect HSV samples at click point
                 self.sample_color(x, y)
-            elif self.phase == "geometry" and len(self.peg_points) < 2:
-                # Geometry phase - collect beam endpoint coordinates
+            elif self.phase == "geometry" and len(self.peg_points) < self.MAX_PEG_POINTS:
+                # Geometry phase - collect motor connection coordinates
                 self.peg_points.append((x, y))
                 print(f"[GEO] Peg {len(self.peg_points)} selected")
-                if len(self.peg_points) == 2:
+                if len(self.peg_points) == self.MAX_PEG_POINTS:
                     self.calculate_geometry()
 
     def sample_color(self, x, y):
@@ -138,14 +143,34 @@ class SimpleAutoCalibrator:
 
     def calculate_geometry(self):
         """Calculate pixel-to-meter conversion ratio from beam endpoint coordinates."""
-        p1, p2 = self.peg_points
+        p1, p2, p3 = self.peg_points
         
         # Calculate pixel distance between beam endpoints
-        pixel_distance = math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
+        # pixel_distance = math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
+
+        # Calculate platform center point
+        center = (math.floor((p1[0] + p2[0] + p3[0])/3), math.floor((p1[1] + p2[1] + p3[1])/3))
+        self.center = center
+
+        # Calculate the opposite peg points
+        p1_opp = (math.floor(2*center[0] - p1[0]), math.floor(2*center[1] - p1[1]))
+        p2_opp = (math.floor(2*center[0] - p2[0]), math.floor(2*center[1] - p2[1]))
+        p3_opp = (math.floor(2*center[0] - p3[0]), math.floor(2*center[1] - p3[1]))
+
+        # Calculate the pixel radius
+        p1_distance = math.sqrt((p1_opp[0] - p1[0])**2 + (p1_opp[1] - p1[1])**2)
+        p2_distance = math.sqrt((p2_opp[0] - p2[0])**2 + (p2_opp[1] - p2[1])**2)
+        p3_distance = math.sqrt((p3_opp[0] - p3[0])**2 + (p3_opp[1] - p3[1])**2)
+        pixel_distance = (p1_distance + p2_distance + p3_distance)/3
         
         # Convert to meters using known beam length
-        self.pixel_to_meter_ratio = self.BEAM_LENGTH_M / pixel_distance
+        self.pixel_to_meter_ratio = self.PLATFORM_DIAMETER_M / pixel_distance
         print(f"[GEO] Pixel-to-meter ratio: {self.pixel_to_meter_ratio:.6f}")
+
+        # Save the opposite peg points
+        self.peg_points.append(p1_opp)
+        self.peg_points.append(p2_opp)
+        self.peg_points.append(p3_opp)
         
         # Advance to limits calibration phase
         self.phase = "limits"
@@ -186,18 +211,43 @@ class SimpleAutoCalibrator:
             return None
         
         # Convert pixel position to meters from center
-        center_x = frame.shape[1] // 2
-        pixel_offset = x - center_x
+        #center_x = frame.shape[1] // 2
+        #center_y = frame.shape[0] // 2
+        pixel_offset_x = x - self.center[0]
+        pixel_offset_y = y - self.center[1]
+        pixel_offset = math.sqrt(pixel_offset_x ** 2 + pixel_offset_y ** 2)
+
         meters_offset = pixel_offset * self.pixel_to_meter_ratio
+
+        # Find the azimuth angle
+        if pixel_offset_x == 0:
+            if pixel_offset_y >= 0:
+                azimuth = 1.5 * math.pi
+            else:
+                azimuth = math.pi / 2
+        else:
+            tan_result = math.atan(pixel_offset_y/pixel_offset_x)
+            # First Quadrant
+            if pixel_offset_x >= 0 and pixel_offset_y < 0:
+                azimuth = -tan_result
+            # Second Quadrant
+            elif pixel_offset_x < 0 and pixel_offset_y < 0:
+                azimuth = math.pi - tan_result
+            # Third Quadrant
+            elif pixel_offset_x < 0 and pixel_offset_y >= 0:
+                azimuth =  math.pi - tan_result
+            # Fourth Quadrant
+            else:
+                azimuth = 2 * math.pi - tan_result 
         
-        return meters_offset
+        return meters_offset, azimuth
 
     def find_limits_automatically(self):
         """Use servo motor to automatically find ball position limits."""
         if not self.servo:
             # Estimate limits without servo if connection failed
-            self.position_min = -self.BEAM_LENGTH_M / 2
-            self.position_max = self.BEAM_LENGTH_M / 2
+            self.position_min = -self.PLATFORM_DIAMETER_M / 2
+            self.position_max = self.PLATFORM_DIAMETER_M / 2
             print("[LIMITS] Estimated without servo")
             return
         
@@ -218,9 +268,10 @@ class SimpleAutoCalibrator:
             while time.time() - start_time < 1.0:
                 ret, frame = self.cap.read()
                 if ret:
-                    pos = self.detect_ball_position(frame)
-                    if pos is not None:
-                        angle_positions.append(pos)
+                    result = self.detect_ball_position(frame)
+                    pos_m = result[0] if result is not None else None
+                    if pos_m is not None:
+                        angle_positions.append(pos_m)
                 time.sleep(0.05)
             
             # Calculate average position for this angle
@@ -244,7 +295,7 @@ class SimpleAutoCalibrator:
         """Save all calibration results to config.json file."""
         config = {
             "timestamp": datetime.now().isoformat(),
-            "beam_length_m": float(self.BEAM_LENGTH_M),
+            "platform_diameter_m": float(self.PLATFORM_DIAMETER_M),
             "camera": {
                 "index": int(self.CAM_INDEX),
                 "frame_width": int(self.FRAME_W),
@@ -262,6 +313,12 @@ class SimpleAutoCalibrator:
             "servo": {
                 "port": str(self.servo_port),
                 "neutral_angle": int(self.neutral_angle)
+            },
+            "geometry": {
+                "center": self.center,
+                "motor_1_pos": self.peg_points[0],
+                "motor_2_pos": self.peg_points[1],
+                "motor_3_pos": self.peg_points[2]
             }
         }
         
@@ -284,7 +341,7 @@ class SimpleAutoCalibrator:
         # Phase-specific instruction text
         phase_text = {
             "color": "Click on ball to sample colors. Press 'c' when done.",
-            "geometry": "Click on beam endpoints (2 points)",
+            "geometry": f"Click on platform motor connection ({self.MAX_PEG_POINTS} points) in order",
             "limits": "Press 'l' to find limits automatically",
             "complete": "Calibration complete! Press 's' to save"
         }
@@ -307,8 +364,11 @@ class SimpleAutoCalibrator:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         
         # Draw line between beam endpoints if both are selected
-        if len(self.peg_points) == 2:
-            cv2.line(overlay, self.peg_points[0], self.peg_points[1], (255, 0, 0), 2)
+        if len(self.peg_points) == self.MAX_PEG_POINTS*2:
+            # cv2.line(overlay, self.peg_points[0], self.peg_points[1], (255, 0, 0), 2)
+            cv2.line(overlay, self.peg_points[0], self.peg_points[3], (255, 0, 0), 2)
+            cv2.line(overlay, self.peg_points[1], self.peg_points[4], (255, 0, 0), 2)
+            cv2.line(overlay, self.peg_points[2], self.peg_points[5], (255, 0, 0), 2)
         
         # Show real-time ball detection if color calibration is complete
         if self.lower_hsv:
@@ -333,9 +393,9 @@ class SimpleAutoCalibrator:
                     
                     # Show position if geometry calibration is complete
                     if self.pixel_to_meter_ratio:
-                        pos = self.detect_ball_position(frame)
-                        if pos is not None:
-                            cv2.putText(overlay, f"Pos: {pos:.4f}m",
+                        pos_m, azimuth = self.detect_ball_position(frame)
+                        if pos_m is not None and azimuth is not None:
+                            cv2.putText(overlay, f"Pos: {pos_m:.4f}m {azimuth*180/math.pi:.2f}deg",
                                        (int(x)+20, int(y)+20),
                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
         
