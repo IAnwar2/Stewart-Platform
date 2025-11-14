@@ -28,6 +28,9 @@ class BasicPIDController:
         # Controller-internal state
         self.setpoint = 0.0
         self.integral = 0.0
+        #self.integral_1 = 0.0
+        #self.integral_2 = 0.0
+        #self.integral_3 = 0.0
         self.prev_error = 0.0
         # Data logs for plotting results
         self.time_log = []
@@ -36,7 +39,10 @@ class BasicPIDController:
         self.control_log = []
         self.start_time = None
         # Thread-safe queue for most recent ball position measurement
-        self.position_queue = queue.Queue(maxsize=1)
+        #self.position_queue = queue.Queue(maxsize=1)
+        self.position_queue_1 = queue.Queue(maxsize=1)
+        self.position_queue_2 = queue.Queue(maxsize=1)
+        self.position_queue_3 = queue.Queue(maxsize=1)
         self.running = False    # Main run flag for clean shutdown
 
     def connect_servo(self):
@@ -50,14 +56,14 @@ class BasicPIDController:
             print(f"[SERVO] Failed: {e}")
             return False
 
-    def send_servo_angle(self, angle):
+    def send_servo_angle(self, angle, channel):
         """Send angle command to servo motor (clipped for safety)."""
         if self.servo:
             servo_angle = self.neutral_angle + angle
             servo_angle = int(np.clip(servo_angle, 0, 30))
             try:
-                print(f"start write ={2} {servo_angle}\n".encode('ascii'))
-                self.servo.write(f"{2} {servo_angle}\n".encode("ascii"))
+                #print(f"start write ={2} {servo_angle}\n".encode('ascii'))
+                self.servo.write(f"{channel} {servo_angle}\n".encode("ascii"))
             except Exception:
                 print("[SERVO] Send failed")
 
@@ -88,17 +94,37 @@ class BasicPIDController:
             ret, frame = cap.read()
             if not ret:
                 continue
-            frame = cv2.resize(frame, (320, 240))
+            #frame = cv2.resize(frame, (320, 240))
             # Detect ball position in frame
-            found, x_normalized, vis_frame = detect_ball_x(frame)
+            found, pos_m1_normalized, pos_m2_normalized, pos_m3_normalized, vis_frame = detect_ball_x(frame)
             if found:
                 # Convert normalized to meters using scale
-                position_m = x_normalized * self.scale_factor
+                #position_m = pos_m1_normalized * self.scale_factor
+                pos_m1 = pos_m1_normalized * self.scale_factor
+                pos_m2 = pos_m2_normalized * self.scale_factor
+                pos_m3 = pos_m3_normalized * self.scale_factor
                 # Always keep latest measurement only
                 try:
-                    if self.position_queue.full():
-                        self.position_queue.get_nowait()
-                    self.position_queue.put_nowait(position_m)
+                    # if self.position_queue.full():
+                    #     self.position_queue.get_nowait()
+                    # self.position_queue.put_nowait(position_m)
+                    # print (position_m)
+
+                    # Motor 1
+                    if self.position_queue_1.full():
+                        self.position_queue_1.get_nowait()
+                    self.position_queue_1.put_nowait(pos_m1)
+                    print (pos_m1)
+                    # Motor 2
+                    if self.position_queue_2.full():
+                        self.position_queue_2.get_nowait()
+                    self.position_queue_2.put_nowait(pos_m2)
+                    print (pos_m2)
+                    # Motor 3
+                    if self.position_queue_3.full():
+                        self.position_queue_3.get_nowait()
+                    self.position_queue_3.put_nowait(pos_m3)
+                    print (pos_m3)
                 except Exception:
                     pass
             # Show processed video with overlays
@@ -117,19 +143,27 @@ class BasicPIDController:
         while self.running:
             try:
                 # Wait for latest ball position from camera
-                position = self.position_queue.get(timeout=0.1)
+                #position = self.position_queue.get(timeout=0.1)
+                pos_1 = self.position_queue_1.get(timeout=0.1)
+                pos_2 = self.position_queue_2.get(timeout=0.1)
+                pos_3 = self.position_queue_3.get(timeout=0.1)
                 # Compute control output using PID
-                control_output = self.update_pid(position)
-                print("update_pid finished")
+                control_output_1 = self.update_pid(pos_1)
+                control_output_2 = self.update_pid(pos_2)
+                control_output_3 = self.update_pid(pos_3)
                 # Send control command to servo (real or simulated)
-                self.send_servo_angle(control_output) # Gets stuck after a while !!!!!!!!!!!!!
+                self.send_servo_angle(control_output_1, 1)
+                self.send_servo_angle(control_output_2, 2)
+                self.send_servo_angle(control_output_3, 3)
                 # Log results for plotting
                 current_time = time.time() - self.start_time
                 self.time_log.append(current_time)
-                self.position_log.append(position)
+                #self.position_log.append(position)
+                self.position_log.append(pos_1)
                 self.setpoint_log.append(self.setpoint)
-                self.control_log.append(control_output)
-                print(f"Pos: {position:.3f}m, Output: {control_output:.1f}°")
+                #self.control_log.append(control_output)
+                self.control_log.append(control_output_1)
+                print(f"Pos: {pos_1:.3f}m, Output: {control_output_1:.1f}°")
             except queue.Empty:
                 continue
             except Exception as e:
@@ -137,7 +171,9 @@ class BasicPIDController:
                 break
         if self.servo:
             # Return to neutral on exit
-            self.send_servo_angle(0)
+            self.send_servo_angle(0,1)
+            self.send_servo_angle(0,2)
+            self.send_servo_angle(0,3)
             self.servo.close()
 
     def create_gui(self):

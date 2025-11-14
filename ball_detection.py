@@ -90,7 +90,7 @@ class BallDetector:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         if not contours:
-            return False, None, None, 0.0
+            return False, None, None, 0.0, 0.0, 0.0
         
         # Select the largest contour (assumed to be the ball)
         largest_contour = max(contours, key=cv2.contourArea)
@@ -100,24 +100,43 @@ class BallDetector:
         
         # Filter out detections that are too small or too large
         if radius < 5 or radius > 100:
-            return False, None, None, 0.0
+            return False, None, None, 0.0, 0.0, 0.0
         
         
         # Convert pixel position to meters from center
         if self.center is not None:
             normalized_x = (x - self.center[0]) / self.center[0]  # Normalize to -1 to +1 range
             normalized_y = (y - self.center[1]) / self.center[1]
-            normalized_pos = math.sqrt(normalized_x ** 2 + normalized_y ** 2)
-            position_m = normalized_pos * self.scale_factor  # Convert to meters
+            relative_p1 = self.p1[0] - self.center[0], self.p1[1] - self.center[1]
+            relative_p2 = self.p2[0] - self.center[0], self.p2[1] - self.center[1]
+            relative_p3 = self.p3[0] - self.center[0], self.p3[1] - self.center[1]
+            # normalized_pos = math.sqrt(normalized_x ** 2 + normalized_y ** 2)
+            # position_m = normalized_pos * self.scale_factor  # Convert to meters
         else:
             center_x = frame.shape[1] // 2  # Frame center x-coordinate
             center_y = frame.shape[0] // 2  # Frame center y-coordinate
             normalized_x = (x - center_x) / center_x  # Normalize to -1 to +1 range
             normalized_y = (y - center_y) / center_y
-            normalized_pos = math.sqrt(normalized_x ** 2 + normalized_y ** 2)
-            position_m = normalized_pos * self.scale_factor  # Convert to meters
-        
-        return True, (int(x), int(y)), radius, position_m
+            relative_p1 = self.p1[0] - center_x, self.p1[1] - center_y
+            relative_p2 = self.p2[0] - center_x, self.p2[1] - center_y
+            relative_p3 = self.p3[0] - center_x, self.p3[1] - center_y
+            # normalized_pos = math.sqrt(normalized_x ** 2 + normalized_y ** 2)
+            # position_m = normalized_pos * self.scale_factor  # Convert to meters
+
+        unit_vector_m1_x = relative_p1[0] / math.sqrt(relative_p1[0] ** 2 + relative_p1[1] ** 2)
+        unit_vector_m1_y = relative_p1[1] / math.sqrt(relative_p1[0] ** 2 + relative_p1[1] ** 2)
+
+        unit_vector_m2_x = relative_p2[0] / math.sqrt(relative_p2[0] ** 2 + relative_p2[1] ** 2)
+        unit_vector_m2_y = relative_p2[1] / math.sqrt(relative_p2[0] ** 2 + relative_p2[1] ** 2) 
+
+        unit_vector_m3_x = relative_p3[0] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2)
+        unit_vector_m3_y = relative_p3[1] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2) 
+
+        pos_along_m1 = normalized_x * unit_vector_m1_x + normalized_y * unit_vector_m1_y
+        pos_along_m2 = normalized_x * unit_vector_m2_x + normalized_y * unit_vector_m2_y
+        pos_along_m3 = normalized_x * unit_vector_m3_x + normalized_y * unit_vector_m3_y
+
+        return True, (int(x), int(y)), radius, pos_along_m1, pos_along_m2, pos_along_m3
 
     def draw_detection(self, frame, show_info=True):
         """Detect ball and draw detection overlay on frame.
@@ -132,7 +151,7 @@ class BallDetector:
             position_m: Ball position in meters
         """
         # Perform ball detection
-        found, center, radius, position_m = self.detect_ball(frame)
+        found, center, radius, pos_m_1, pos_m_2, pos_m_3 = self.detect_ball(frame)
         
         # Create overlay copy for drawing
         overlay = frame.copy()
@@ -169,12 +188,16 @@ class BallDetector:
             
             if show_info:
                 # Display ball position information
-                cv2.putText(overlay, f"x: {center[0]}", (center[0] - 30, center[1] - 40),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-                cv2.putText(overlay, f"pos: {position_m:.4f}m", (center[0] - 40, center[1] - 20),
+                #cv2.putText(overlay, f"x: {center[0]}", (center[0] - 30, center[1] - 40),
+                #           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+                cv2.putText(overlay, f"motor 1 pos: {pos_m_1:.4f}m", (center[0] - 30, center[1] - 60),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                cv2.putText(overlay, f"motor 2 pos: {pos_m_2:.4f}m", (center[0] - 40, center[1] - 40),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                cv2.putText(overlay, f"motor 3 pos: {pos_m_3:.4f}m", (center[0] - 50, center[1] - 20),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
         
-        return overlay, found, position_m
+        return overlay, found, pos_m_1, pos_m_2, pos_m_3
 
 # Legacy function for backward compatibility with existing code
 def detect_ball_x(frame):
@@ -195,16 +218,24 @@ def detect_ball_x(frame):
     detector = BallDetector()
     
     # Get detection results with visual overlay
-    vis_frame, found, position_m = detector.draw_detection(frame)
+    vis_frame, found, pos_m_1, pos_m_2, pos_m_3 = detector.draw_detection(frame)
     
     if found:
         # Convert back to normalized coordinates for legacy compatibility
-        x_normalized = position_m / detector.scale_factor if detector.scale_factor != 0 else 0.0
-        x_normalized = np.clip(x_normalized, -1.0, 1.0)  # Ensure within bounds
+        pos_m1_normalized = pos_m_1 / detector.scale_factor if detector.scale_factor != 0 else 0.0
+        pos_m1_normalized = np.clip(pos_m1_normalized, -1.0, 1.0)  # Ensure within bounds
+
+        pos_m2_normalized = pos_m_2 / detector.scale_factor if detector.scale_factor != 0 else 0.0
+        pos_m2_normalized = np.clip(pos_m2_normalized, -1.0, 1.0)  # Ensure within bounds
+
+        pos_m3_normalized = pos_m_3 / detector.scale_factor if detector.scale_factor != 0 else 0.0
+        pos_m3_normalized = np.clip(pos_m3_normalized, -1.0, 1.0)  # Ensure within bounds
     else:
-        x_normalized = 0.0
+        pos_m1_normalized = 0.0
+        pos_m2_normalized = 0.0
+        pos_m3_normalized = 0.0
     
-    return found, x_normalized, vis_frame
+    return found, pos_m1_normalized, pos_m2_normalized, pos_m3_normalized, vis_frame
 
 def define_motor_axis(center, m_point, height, width):
     """ Determines the boundary points for a line perpindicular to a motor on the center point
@@ -266,11 +297,11 @@ def main():
         frame = cv2.resize(frame, (640, 480))
         
         # Get detection results with overlay
-        vis_frame, found, position_m = detector.draw_detection(frame)
+        vis_frame, found, pos_m_1, pos_m_2, pos_m_3 = detector.draw_detection(frame)
         
         # Show detection info in console
         if found:
-            print(f"Ball detected at {position_m:.4f}m from center")
+            print(f"Ball detected at {pos_m_1:.4f}m from m1 axis, {pos_m_2:.4f}m from m2 axis, {pos_m_3:.4f}m from m3 axis")
         
         # Display frame with detection overlay
         cv2.imshow("Ball Detection Test", vis_frame)
