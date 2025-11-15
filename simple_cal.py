@@ -72,8 +72,8 @@ class SimpleAutoCalibrator:
         """
         if self.servo:
             # Clip angle to safe range and send as byte
-            angle = int(np.clip(angle, 0, 30))
-            self.servo.write(f"{2} {angle}\n".encode("ascii"))
+            angle = int(np.clip(angle, -10, 30))
+            self.servo.write(f"{1} {angle}\n".encode("ascii"))
             # self.servo.write(bytes([angle]))
 
     def mouse_callback(self, event, x, y, flags, param):
@@ -255,7 +255,7 @@ class SimpleAutoCalibrator:
         positions = []
         
         # Test servo at different angles to find position range
-        test_angles = [self.neutral_angle - 15, self.neutral_angle, self.neutral_angle + 15]
+        test_angles = [self.neutral_angle - 25, self.neutral_angle, self.neutral_angle + 15]
         
         for angle in test_angles:
             # Move servo to test angle
@@ -285,7 +285,7 @@ class SimpleAutoCalibrator:
         
         # Determine position limits from collected data
         if len(positions) >= 2:
-            self.position_min = min(positions)
+            self.position_min = -min(positions)
             self.position_max = max(positions)
             print(f"[LIMITS] Range: {self.position_min:.4f}m to {self.position_max:.4f}m")
         else:

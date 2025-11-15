@@ -223,13 +223,13 @@ def detect_ball_x(frame):
     if found:
         # Convert back to normalized coordinates for legacy compatibility
         pos_m1_normalized = pos_m_1 / detector.scale_factor if detector.scale_factor != 0 else 0.0
-        pos_m1_normalized = np.clip(pos_m1_normalized, -1.0, 1.0)  # Ensure within bounds
+        pos_m1_normalized = np.clip(pos_m1_normalized, -3.0, 3.0)  # Ensure within bounds
 
         pos_m2_normalized = pos_m_2 / detector.scale_factor if detector.scale_factor != 0 else 0.0
-        pos_m2_normalized = np.clip(pos_m2_normalized, -1.0, 1.0)  # Ensure within bounds
+        pos_m2_normalized = np.clip(pos_m2_normalized, -3.0, 3.0)  # Ensure within bounds
 
         pos_m3_normalized = pos_m_3 / detector.scale_factor if detector.scale_factor != 0 else 0.0
-        pos_m3_normalized = np.clip(pos_m3_normalized, -1.0, 1.0)  # Ensure within bounds
+        pos_m3_normalized = np.clip(pos_m3_normalized, -3.0, 3.0)  # Ensure within bounds
     else:
         pos_m1_normalized = 0.0
         pos_m2_normalized = 0.0
@@ -252,7 +252,11 @@ def define_motor_axis(center, m_point, height, width):
     """
 
     # Calculate the y coordinates of C and D
-    slope = (center[0] - m_point[0])/(m_point[1] - center[1])
+    run = m_point[1] - center[1]
+    if run == 0: # Straight vertical line
+        return (center[0], 0), (center[0], height)
+    
+    slope = (center[0] - m_point[0])/run
     point_C_y = slope * 0 + center[1] - slope * center[0]
     point_D_y = slope * width + center[1] - slope * center[0]
 
