@@ -40,7 +40,7 @@ class BasicPIDController:
         self.position_queue = [queue.Queue(maxsize=1), queue.Queue(maxsize=1), queue.Queue(maxsize=1)]
         self.running = False    # Main run flag for clean shutdown
 
-        self.active_motors = {0, 1, 2} # Store the active motors' (idx) in a Set (initially motor 1)
+        self.active_motors = [True, False, False] # Store the active motors
         self.ctrl_motor_idx = 0
         self.mult = [-1, 1, -1] # Some motors are positive in the wrong direction (probably cause of camera)
         
@@ -104,11 +104,12 @@ class BasicPIDController:
                 position_m[2] = pos_m3_normalized * self.scale_factor * self.mult[2]
                 # Always keep latest measurement only
                 try:
-                    for motor_idx in self.active_motors:
-                        if self.position_queue[motor_idx].full():
-                            self.position_queue[motor_idx].get_nowait()
-                        self.position_queue[motor_idx].put_nowait(position_m[motor_idx])
-                        print(position_m[motor_idx])
+                    for motor_idx in range(3):
+                        if self.active_motors[motor_idx]:
+                            if self.position_queue[motor_idx].full():
+                                self.position_queue[motor_idx].get_nowait()
+                            self.position_queue[motor_idx].put_nowait(position_m[motor_idx])
+                            print(f"Motor {motor_idx + 1}: {position_m[motor_idx]}")
                 except Exception:
                     pass
             # Show processed video with overlays
@@ -126,20 +127,29 @@ class BasicPIDController:
         self.start_time = time.time()
         while self.running:
             try:
-                for motor_idx in self.active_motors:
-                    # Wait for latest ball position from camera
-                    position = self.position_queue[motor_idx].get(timeout=0.1)
-                    # Compute control output using PID
-                    control_output = self.update_pid(position, motor_idx)
-                    # Send control command to servo (real or simulated)
-                    self.send_servo_angle(control_output, motor_idx + 1)
-                    # Log results for plotting
-                    current_time = time.time() - self.start_time
-                    self.time_log[motor_idx].append(current_time)
-                    self.position_log[motor_idx].append(position)
-                    self.setpoint_log[motor_idx].append(self.setpoint[motor_idx])
-                    self.control_log[motor_idx].append(control_output)
-                    print(f"Pos: {position:.3f}m, Output: {control_output:.1f}°")
+                for motor_idx in range(3):
+                    if self.active_motors[motor_idx]:
+                        # Wait for latest ball position from camera
+                        position = self.position_queue[motor_idx].get(timeout=0.1)
+                        # Compute control output using PID
+                        control_output = self.update_pid(position, motor_idx)
+                        # Send control command to servo (real or simulated)
+                        self.send_servo_angle(control_output, motor_idx + 1)
+                        # Log results for plotting
+                        current_time = time.time() - self.start_time
+                        self.time_log[motor_idx].append(current_time)
+                        self.position_log[motor_idx].append(position)
+                        self.setpoint_log[motor_idx].append(self.setpoint[motor_idx])
+                        self.control_log[motor_idx].append(control_output)
+                        print(f"Motor {motor_idx + 1} Pos: {position:.3f}m, Output: {control_output:.1f}°")
+                    else: # Set inactive to neutral angle
+                        self.send_servo_angle(0, motor_idx + 1)
+                        # Log results for plotting
+                        current_time = time.time() - self.start_time
+                        self.time_log[motor_idx].append(current_time)
+                        self.position_log[motor_idx].append(0)
+                        self.setpoint_log[motor_idx].append(self.setpoint[motor_idx])
+                        self.control_log[motor_idx].append(0)
             except queue.Empty:
                 continue
             except Exception as e:
@@ -156,7 +166,7 @@ class BasicPIDController:
         """Build Tkinter GUI with large sliders and labeled controls."""
         self.root = tk.Tk()
         self.root.title("Basic PID Controller")
-        self.root.geometry("520x400")
+        self.root.geometry("520x560")
 
         ctrl_m = self.ctrl_motor_idx
 
@@ -212,6 +222,26 @@ class BasicPIDController:
         ttk.Button(button_frame, text="Stop",
                    command=self.stop).pack(side=tk.LEFT, padx=5)
 
+        # Control motor
+        ttk.Label(self.root, text="Controlled Motor", font=("Arial", 10)).pack()
+        control_frame = ttk.Frame(self.root)
+        control_frame.pack(pady=5)
+        self.ctrl_m_var = tk.IntVar(value=ctrl_m)
+        ttk.Radiobutton(control_frame, text="Motor 1", variable=self.ctrl_m_var, value=0).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(control_frame, text="Motor 2", variable=self.ctrl_m_var, value=1).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(control_frame, text="Motor 3", variable=self.ctrl_m_var, value=2).pack(side=tk.LEFT, padx=5)
+
+        # Active motors
+        ttk.Label(self.root, text="Active Motors", font=("Arial", 10)).pack()
+        active_frame = ttk.Frame(self.root)
+        active_frame.pack(pady=5)
+        self.act_m1_var = tk.IntVar(value=self.active_motors[0])
+        ttk.Checkbutton(active_frame, text="Motor 1", variable=self.act_m1_var).pack(side=tk.LEFT, padx=5)
+        self.act_m2_var = tk.IntVar(value=self.active_motors[1])
+        ttk.Checkbutton(active_frame, text="Motor 2", variable=self.act_m2_var).pack(side=tk.LEFT, padx=5)
+        self.act_m3_var = tk.IntVar(value=self.active_motors[2])
+        ttk.Checkbutton(active_frame, text="Motor 3", variable=self.act_m3_var).pack(side=tk.LEFT, padx=5)
+
         # Schedule periodic GUI update
         self.update_gui()
 
@@ -224,6 +254,12 @@ class BasicPIDController:
             self.Ki[ctrl_m] = self.ki_var.get()
             self.Kd[ctrl_m] = self.kd_var.get()
             self.setpoint[ctrl_m] = self.setpoint_var.get()
+            # Controlled motor
+            self.ctrl_motor_idx = self.ctrl_m_var.get()
+            # Active motors
+            self.active_motors[0] = self.act_m1_var.get()
+            self.active_motors[1] = self.act_m2_var.get()
+            self.active_motors[2] = self.act_m3_var.get()
             # Update displayed values
             self.kp_label.config(text=f"Kp: {self.Kp[ctrl_m]:.3f}")
             self.ki_label.config(text=f"Ki: {self.Ki[ctrl_m]:.3f}")
