@@ -43,7 +43,13 @@ class BasicPIDController:
         self.active_motors = [True, False, False] # Store the active motors
         self.ctrl_motor_idx = 0
         self.mult = [-1, 1, -1] # Some motors are positive in the wrong direction (probably cause of camera)
-        
+        # store last seen positions so control loop can use last-known value if camera misses a frame
+        self.last_positions = [0.0, 0.0, 0.0]
+        # previous timestamp for computing dt in control loop
+        self.prev_control_time = None
+        # limits for integral anti-windup
+        self.integral_limits = [1000.0, 1000.0, 1000.0]
+
 
     def connect_servo(self):
         """Try to open serial connection to servo, return True if success."""
@@ -66,24 +72,50 @@ class BasicPIDController:
             except Exception:
                 print("[SERVO] Send failed")
 
-    def update_pid(self, position, motor_idx, dt=0.033):
-        """Perform PID calculation and return control output."""
-        error = self.setpoint[motor_idx] - position  # Compute error
-        error = error * 100  # Scale error for easier tuning (if needed)
-        # Proportional term
+    def update_pid(self, position, motor_idx, dt):
+        """Perform PID calculation using provided dt and return control output.
+
+        Includes simple anti-windup (clamp integral) and uses stored previous error.
+        """
+        # Guard dt
+        if dt is None or dt <= 0:
+            dt = 0.033
+
+        # compute error (scale to make tuning comparable to previous behavior)
+        error = (self.setpoint[motor_idx] - position) * 100.0
+
+        # Proportional
         P = self.Kp[motor_idx] * error
-        # Integral term accumulation
+
+        # Integral (accumulate but clamp to prevent windup)
         self.integral[motor_idx] += error * dt
+        # clamp integral
+        lim = self.integral_limits[motor_idx]
+        if self.integral[motor_idx] > lim:
+            self.integral[motor_idx] = lim
+        elif self.integral[motor_idx] < -lim:
+            self.integral[motor_idx] = -lim
         I = self.Ki[motor_idx] * self.integral[motor_idx]
-        # Derivative term calculation
+
+        # Derivative (protect against dt==0)
         derivative = (error - self.prev_error[motor_idx]) / dt
         D = self.Kd[motor_idx] * derivative
         self.prev_error[motor_idx] = error
-        # PID output (limit to safe beam range)
-        output = P + I + D
-        output = np.clip(output, -30, 30)
-        print(error)
-        return output
+
+        # raw PID output
+        output_unclipped = P + I + D
+
+        # clip final output
+        output = np.clip(output_unclipped, -30.0, 30.0)
+
+        # Simple anti-windup: if clipped, reduce integral slightly to avoid long-term saturation
+        if output != output_unclipped:
+            # back-off factor (small) to slowly unwind integrator
+            self.integral[motor_idx] *= 0.9
+
+        # debug print of scaled error occasionally
+        # print(f"[PID] m{motor_idx+1} err={error:.2f} P={P:.2f} I={I:.2f} D={D:.2f} out={output:.2f}")
+        return float(output)
 
     def camera_thread(self):
         """Dedicated thread for video capture and ball detection."""
@@ -125,33 +157,71 @@ class BasicPIDController:
         if not self.connect_servo():
             print("[ERROR] No servo - running in simulation mode")
         self.start_time = time.time()
+        # control loop will run at roughly 30-60 Hz depending on camera update
         while self.running:
             try:
+                loop_time = time.time()
+                if self.prev_control_time is None:
+                    dt = 0.033
+                else:
+                    dt = max(1e-3, loop_time - self.prev_control_time)
+                self.prev_control_time = loop_time
+
+                # collect latest positions for all motors (non-blocking). Use last known if missing.
+                positions = [None, None, None]
+                for motor_idx in range(3):
+                    positions[motor_idx] = self.last_positions[motor_idx]
+                    if self.active_motors[motor_idx]:
+                        try:
+                            # get newest position if available
+                            pos = self.position_queue[motor_idx].get_nowait()
+                            positions[motor_idx] = pos
+                            self.last_positions[motor_idx] = pos
+                        except queue.Empty:
+                            # no new measurement this loop: use last known
+                            pass
+
+                # compute PID outputs for all motors (so we can coordinate/decouple)
+                raw_outputs = [0.0, 0.0, 0.0]
                 for motor_idx in range(3):
                     if self.active_motors[motor_idx]:
-                        # Wait for latest ball position from camera
-                        position = self.position_queue[motor_idx].get(timeout=0.1)
-                        # Compute control output using PID
-                        control_output = self.update_pid(position, motor_idx)
-                        # Send control command to servo (real or simulated)
-                        self.send_servo_angle(control_output, motor_idx + 1)
-                        # Log results for plotting
-                        current_time = time.time() - self.start_time
+                        raw_outputs[motor_idx] = self.update_pid(positions[motor_idx], motor_idx, dt)
+                    else:
+                        raw_outputs[motor_idx] = 0.0
+
+                # Simple coordination/decoupling step:
+                # remove mean of active outputs to reduce net rotation (simple heuristic)
+                active_indices = [i for i in range(3) if self.active_motors[i]]
+                if len(active_indices) > 0:
+                    mean_active = float(np.mean([raw_outputs[i] for i in active_indices]))
+                    coordinated_outputs = raw_outputs.copy()
+                    for i in active_indices:
+                        coordinated_outputs[i] = float(np.clip(raw_outputs[i] - mean_active, -30.0, 30.0))
+                else:
+                    coordinated_outputs = raw_outputs
+
+                # send commands and log
+                current_time = time.time() - self.start_time
+                for motor_idx in range(3):
+                    if self.active_motors[motor_idx]:
+                        out = coordinated_outputs[motor_idx]
+                        self.send_servo_angle(out, motor_idx + 1)
                         self.time_log[motor_idx].append(current_time)
-                        self.position_log[motor_idx].append(position)
+                        self.position_log[motor_idx].append(positions[motor_idx])
                         self.setpoint_log[motor_idx].append(self.setpoint[motor_idx])
-                        self.control_log[motor_idx].append(control_output)
-                        print(f"Motor {motor_idx + 1} Pos: {position:.3f}m, Output: {control_output:.1f}°")
-                    else: # Set inactive to neutral angle
+                        self.control_log[motor_idx].append(out)
+                        # minimal console logging
+                        print(f"Motor {motor_idx + 1} Pos: {positions[motor_idx]:.3f}m, Out: {out:.1f}°")
+                    else:
+                        # make sure inactive motors are commanded to neutral
                         self.send_servo_angle(0, motor_idx + 1)
-                        # Log results for plotting
-                        current_time = time.time() - self.start_time
                         self.time_log[motor_idx].append(current_time)
                         self.position_log[motor_idx].append(0)
                         self.setpoint_log[motor_idx].append(self.setpoint[motor_idx])
                         self.control_log[motor_idx].append(0)
-            except queue.Empty:
-                continue
+
+                # small sleep to avoid busy loop if camera is slow
+                time.sleep(0.01)
             except Exception as e:
                 print(f"[CONTROL] Error: {e}")
                 break
