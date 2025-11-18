@@ -27,6 +27,8 @@ class BallDetector:
         self.p1 = None
         self.p2 = None
         self.p3 = None
+
+        self.setpoint = None
         
         # Load configuration from file if it exists
         if os.path.exists(config_file):

@@ -3,6 +3,7 @@ import numpy as np
 import json
 import serial
 import time
+import math
 import tkinter as tk
 import matplotlib.pyplot as plt
 from tkinter import ttk
@@ -28,6 +29,7 @@ class BasicPIDController:
         self.servo = None
         # Controller-internal state
         self.setpoint = [0.0, 0.0, 0.0]
+        #self.setpoint_xy = [0, 0]
         self.integral = [0.0, 0.0, 0.0]
         self.prev_error = [0.0, 0.0, 0.0]
         # Data logs for plotting results
@@ -44,6 +46,11 @@ class BasicPIDController:
         self.ctrl_motor_idx = 0
         self.mult = [-1, -1, -1] # Some motors are positive in the wrong direction (probably cause of camera)
         
+        # Geometry
+        # self.center = np.array(self.config['geometry']['center'])
+        # self.p1 = np.array(self.config['geometry']['motor_1_pos'])
+        # self.p2 = np.array(self.config['geometry']['motor_2_pos'])
+        # self.p3 = np.array(self.config['geometry']['motor_3_pos'])
 
     def connect_servo(self):
         """Try to open serial connection to servo, return True if success."""
@@ -60,7 +67,7 @@ class BasicPIDController:
         """Send angle command to servo motor (clipped for safety)."""
         if self.servo:
             servo_angle = self.neutral_angle + angle
-            servo_angle = int(np.clip(servo_angle, 0, 30))
+            servo_angle = int(np.clip(servo_angle, 0, 40))
             try:
                 self.servo.write(f"{channel} {servo_angle}\n".encode("ascii"))
             except Exception:
@@ -69,7 +76,7 @@ class BasicPIDController:
     def update_pid(self, position, motor_idx, dt=0.033):
         """Perform PID calculation and return control output."""
         error = self.setpoint[motor_idx] - position  # Compute error
-        error = (error * 100)  if abs(error) >= 0.02 else 0 # Scale error for easier tuning (if needed)
+        error = (error * 100)  if abs(error) >= 0.1 else 0 # Scale error for easier tuning (if needed)
         #print(error)
         # Proportional term
         P = self.Kp[motor_idx] * error
@@ -90,11 +97,16 @@ class BasicPIDController:
         """Dedicated thread for video capture and ball detection."""
         cap = cv2.VideoCapture(self.config['camera']['index'], cv2.CAP_DSHOW)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        # cv2.namedWindow("Ball Tracking")
+        # cv2.setMouseCallback("Ball Tracking", self.mouse_callback)
         while self.running:
             ret, frame = cap.read()
             if not ret:
                 continue
             #frame = cv2.resize(frame, (320, 240))
+            # cv2.circle(frame, self.setpoint_xy, 8, (0, 255, 0), -1)
+
             # Detect ball position in frame
             found, pos_m1_normalized, pos_m2_normalized, pos_m3_normalized, vis_frame = detect_ball_x(frame)
             if found:
@@ -121,6 +133,37 @@ class BasicPIDController:
         cap.release()
         cv2.destroyAllWindows()
 
+    # def mouse_callback(self, event, x, y, flags, param):
+    #     """Handle mouse click events for interactive calibration.
+        
+    #     Args:
+    #         event: OpenCV mouse event type
+    #         x, y: Mouse click coordinates
+    #         flags: Additional event flags
+    #         param: User data (unused)
+    #     """
+
+    #     if event == cv2.EVENT_LBUTTONDOWN:
+    #         self.setpoint_xy = [x, y]
+    #         relative_p1 = self.p1[0] - self.center[0], self.p1[1] - self.center[1]
+    #         relative_p2 = self.p2[0] - self.center[0], self.p2[1] - self.center[1]
+    #         relative_p3 = self.p3[0] - self.center[0], self.p3[1] - self.center[1]
+
+    #         unit_vector_m1_x = relative_p1[0] / math.sqrt(relative_p1[0] ** 2 + relative_p1[1] ** 2)
+    #         unit_vector_m1_y = relative_p1[1] / math.sqrt(relative_p1[0] ** 2 + relative_p1[1] ** 2)
+
+    #         unit_vector_m2_x = relative_p2[0] / math.sqrt(relative_p2[0] ** 2 + relative_p2[1] ** 2)
+    #         unit_vector_m2_y = relative_p2[1] / math.sqrt(relative_p2[0] ** 2 + relative_p2[1] ** 2) 
+
+    #         unit_vector_m3_x = relative_p3[0] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2)
+    #         unit_vector_m3_y = relative_p3[1] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2) 
+
+    #         pos_along_m1 = (x - self.center[0]) * unit_vector_m1_x + (y - self.center[1]) * unit_vector_m1_y
+    #         pos_along_m2 = (x - self.center[0]) * unit_vector_m2_x + (y - self.center[1]) * unit_vector_m2_y
+    #         pos_along_m3 = (x - self.center[0]) * unit_vector_m3_x + (y - self.center[1]) * unit_vector_m3_y
+
+    #         self.setpoint = [pos_along_m1, pos_along_m2, pos_along_m3]
+
     def control_thread(self):
         """Runs PID control loop in parallel with GUI and camera."""
         if not self.connect_servo():
@@ -134,7 +177,7 @@ class BasicPIDController:
                         position = self.position_queue[motor_idx].get(timeout=0.1)
                         # Compute control output using PID
                         control_output = self.update_pid(position, motor_idx)
-                        #control_output = control_output/np.clip(self.active_motors.count(True), 1, 3)
+                        control_output = control_output/np.clip(self.active_motors.count(True), 1, 2)
                         # Send control command to servo (real or simulated)
                         self.send_servo_angle(control_output, motor_idx + 1)
                         # Log results for plotting
