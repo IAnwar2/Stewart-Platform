@@ -29,7 +29,6 @@ class BasicPIDController:
         self.servo = None
         # Controller-internal state
         self.setpoint = [0.0, 0.0, 0.0]
-        #self.setpoint_xy = [0, 0]
         self.integral = [0.0, 0.0, 0.0]
         self.prev_error = [0.0, 0.0, 0.0]
         # Data logs for plotting results
@@ -42,15 +41,16 @@ class BasicPIDController:
         self.position_queue = [queue.Queue(maxsize=1), queue.Queue(maxsize=1), queue.Queue(maxsize=1)]
         self.running = False    # Main run flag for clean shutdown
 
-        self.active_motors = [True, False, False] # Store the active motors
+        self.active_motors = [1, 1, 1] # Store the active motors
         self.ctrl_motor_idx = 0
         self.mult = [-1, -1, -1] # Some motors are positive in the wrong direction (probably cause of camera)
         
         # Geometry
-        # self.center = np.array(self.config['geometry']['center'])
-        # self.p1 = np.array(self.config['geometry']['motor_1_pos'])
-        # self.p2 = np.array(self.config['geometry']['motor_2_pos'])
-        # self.p3 = np.array(self.config['geometry']['motor_3_pos'])
+        self.center = np.array(self.config['geometry']['center'])
+        self.p1 = np.array(self.config['geometry']['motor_1_pos'])
+        self.p2 = np.array(self.config['geometry']['motor_2_pos'])
+        self.p3 = np.array(self.config['geometry']['motor_3_pos'])
+        self.setpoint_xy = self.center
 
     def connect_servo(self):
         """Try to open serial connection to servo, return True if success."""
@@ -76,7 +76,7 @@ class BasicPIDController:
     def update_pid(self, position, motor_idx, dt=0.033):
         """Perform PID calculation and return control output."""
         error = self.setpoint[motor_idx] - position  # Compute error
-        error = (error * 100)  if abs(error) >= 0.1 else 0 # Scale error for easier tuning (if needed)
+        error = (error * 100)  if abs(error) >= 0.08 else 0 # Scale error for easier tuning (if needed)
         #print(error)
         # Proportional term
         P = self.Kp[motor_idx] * error
@@ -98,14 +98,17 @@ class BasicPIDController:
         cap = cv2.VideoCapture(self.config['camera']['index'], cv2.CAP_DSHOW)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         
-        # cv2.namedWindow("Ball Tracking")
-        # cv2.setMouseCallback("Ball Tracking", self.mouse_callback)
+        cv2.namedWindow("Ball Tracking")
+        cv2.setMouseCallback("Ball Tracking", self.mouse_callback)
         while self.running:
             ret, frame = cap.read()
             if not ret:
                 continue
             #frame = cv2.resize(frame, (320, 240))
-            # cv2.circle(frame, self.setpoint_xy, 8, (0, 255, 0), -1)
+            cv2.circle(frame, self.setpoint_xy, 8, (0, 255, 0), -1)
+            # cv2.circle(frame, self.p1, 2, (0, 255, 0), -1)
+            # cv2.circle(frame, self.p2, 2, (0, 255, 0), -1)
+            # cv2.circle(frame, self.p3, 2, (0, 255, 0), -1)
 
             # Detect ball position in frame
             found, pos_m1_normalized, pos_m2_normalized, pos_m3_normalized, vis_frame = detect_ball_x(frame)
@@ -133,36 +136,40 @@ class BasicPIDController:
         cap.release()
         cv2.destroyAllWindows()
 
-    # def mouse_callback(self, event, x, y, flags, param):
-    #     """Handle mouse click events for interactive calibration.
+    def mouse_callback(self, event, x, y, flags, param):
+        """Handle mouse click events for interactive calibration.
         
-    #     Args:
-    #         event: OpenCV mouse event type
-    #         x, y: Mouse click coordinates
-    #         flags: Additional event flags
-    #         param: User data (unused)
-    #     """
+        Args:
+            event: OpenCV mouse event type
+            x, y: Mouse click coordinates
+            flags: Additional event flags
+            param: User data (unused)
+        """
 
-    #     if event == cv2.EVENT_LBUTTONDOWN:
-    #         self.setpoint_xy = [x, y]
-    #         relative_p1 = self.p1[0] - self.center[0], self.p1[1] - self.center[1]
-    #         relative_p2 = self.p2[0] - self.center[0], self.p2[1] - self.center[1]
-    #         relative_p3 = self.p3[0] - self.center[0], self.p3[1] - self.center[1]
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.setpoint_xy = [x, y]
 
-    #         unit_vector_m1_x = relative_p1[0] / math.sqrt(relative_p1[0] ** 2 + relative_p1[1] ** 2)
-    #         unit_vector_m1_y = relative_p1[1] / math.sqrt(relative_p1[0] ** 2 + relative_p1[1] ** 2)
+            normalized_x = (x - self.center[0]) / self.center[0]
+            normalized_y = (y - self.center[1]) / self.center[1]
 
-    #         unit_vector_m2_x = relative_p2[0] / math.sqrt(relative_p2[0] ** 2 + relative_p2[1] ** 2)
-    #         unit_vector_m2_y = relative_p2[1] / math.sqrt(relative_p2[0] ** 2 + relative_p2[1] ** 2) 
+            relative_p1 = self.p1[0] - self.center[0], self.p1[1] - self.center[1]
+            relative_p2 = self.p2[0] - self.center[0], self.p2[1] - self.center[1]
+            relative_p3 = self.p3[0] - self.center[0], self.p3[1] - self.center[1]
 
-    #         unit_vector_m3_x = relative_p3[0] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2)
-    #         unit_vector_m3_y = relative_p3[1] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2) 
+            unit_vector_m1_x = relative_p1[0] / math.sqrt(relative_p1[0] ** 2 + relative_p1[1] ** 2)
+            unit_vector_m1_y = relative_p1[1] / math.sqrt(relative_p1[0] ** 2 + relative_p1[1] ** 2)
 
-    #         pos_along_m1 = (x - self.center[0]) * unit_vector_m1_x + (y - self.center[1]) * unit_vector_m1_y
-    #         pos_along_m2 = (x - self.center[0]) * unit_vector_m2_x + (y - self.center[1]) * unit_vector_m2_y
-    #         pos_along_m3 = (x - self.center[0]) * unit_vector_m3_x + (y - self.center[1]) * unit_vector_m3_y
+            unit_vector_m2_x = relative_p2[0] / math.sqrt(relative_p2[0] ** 2 + relative_p2[1] ** 2)
+            unit_vector_m2_y = relative_p2[1] / math.sqrt(relative_p2[0] ** 2 + relative_p2[1] ** 2) 
 
-    #         self.setpoint = [pos_along_m1, pos_along_m2, pos_along_m3]
+            unit_vector_m3_x = relative_p3[0] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2)
+            unit_vector_m3_y = relative_p3[1] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2)
+
+            pos_along_m1 = normalized_x * unit_vector_m1_x + normalized_y * unit_vector_m1_y
+            pos_along_m2 = normalized_x * unit_vector_m2_x + normalized_y * unit_vector_m2_y
+            pos_along_m3 = normalized_x * unit_vector_m3_x + normalized_y * unit_vector_m3_y
+
+            self.setpoint = [-pos_along_m1, -pos_along_m2, -pos_along_m3]
 
     def control_thread(self):
         """Runs PID control loop in parallel with GUI and camera."""
@@ -177,7 +184,7 @@ class BasicPIDController:
                         position = self.position_queue[motor_idx].get(timeout=0.1)
                         # Compute control output using PID
                         control_output = self.update_pid(position, motor_idx)
-                        control_output = control_output/np.clip(self.active_motors.count(True), 1, 2)
+                        control_output = control_output/np.clip(self.active_motors.count(True), 1, 3)
                         # Send control command to servo (real or simulated)
                         self.send_servo_angle(control_output, motor_idx + 1)
                         # Log results for plotting
@@ -249,12 +256,12 @@ class BasicPIDController:
         ttk.Label(self.root, text="Setpoint (meters)", font=("Arial", 12)).pack()
         pos_min = self.config['calibration']['position_min_m']
         pos_max = self.config['calibration']['position_max_m']
-        self.setpoint_var = tk.DoubleVar(value=self.setpoint[ctrl_m])
-        setpoint_slider = ttk.Scale(self.root, from_=pos_min, to=pos_max,
-                                   variable=self.setpoint_var,
-                                   orient=tk.HORIZONTAL, length=500)
-        setpoint_slider.pack(pady=5)
-        self.setpoint_label = ttk.Label(self.root, text=f"Setpoint: {self.setpoint[ctrl_m]:.3f}m", font=("Arial", 11))
+        #self.setpoint_var = tk.DoubleVar(value=self.setpoint[ctrl_m])
+        # setpoint_slider = ttk.Scale(self.root, from_=pos_min, to=pos_max,
+        #                            variable=self.setpoint_var,
+        #                            orient=tk.HORIZONTAL, length=500)
+        # setpoint_slider.pack(pady=5)
+        self.setpoint_label = ttk.Label(self.root, text=f"Setpoint: ({self.setpoint[0]}, {self.setpoint[1]}, {self.setpoint[2]}) m", font=("Arial", 11))
         self.setpoint_label.pack()
 
         # Button group for actions
@@ -302,12 +309,12 @@ class BasicPIDController:
                 self.Kp[ctrl_m] = self.kp_var.get()
                 self.Ki[ctrl_m] = self.ki_var.get()
                 self.Kd[ctrl_m] = self.kd_var.get()
-                self.setpoint[ctrl_m] = self.setpoint_var.get()
+                #self.setpoint[ctrl_m] = self.setpoint_var.get()
             else:
                 self.kp_var.set(self.Kp[ctrl_m])
                 self.ki_var.set(self.Ki[ctrl_m])
                 self.kd_var.set(self.Kd[ctrl_m])
-                self.setpoint_var.set(self.setpoint[ctrl_m])
+                #self.setpoint_var.set(self.setpoint[ctrl_m])
             # Active motors
             self.active_motors[0] = self.act_m1_var.get()
             self.active_motors[1] = self.act_m2_var.get()
@@ -316,7 +323,7 @@ class BasicPIDController:
             self.kp_label.config(text=f"Kp: {self.Kp[ctrl_m]:.3f}")
             self.ki_label.config(text=f"Ki: {self.Ki[ctrl_m]:.3f}")
             self.kd_label.config(text=f"Kd: {self.Kd[ctrl_m]:.3f}")
-            self.setpoint_label.config(text=f"Setpoint: {self.setpoint[ctrl_m]:.3f}m")
+            self.setpoint_label.config(text=f"Setpoint: ({self.setpoint[0]:.3f}, {self.setpoint[1]:.3f}, {self.setpoint[2]:.3f}) m")
             # Call again after 50 ms (if not stopped)
             self.root.after(50, self.update_gui)
 
