@@ -9,9 +9,9 @@ Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
 #define SERVO_FREQ   50      // 50 Hz hobby servos
 
 // ---- App limits/neutral (same semantics as your first sketch) ----
-const int MIN_ANGLE = -10;
-const int MAX_ANGLE = 30;
-const int NEUTRAL_ANGLE = 15;
+const int MIN_ANGLE = 0;
+const int MAX_ANGLE = 40;
+const int NEUTRAL_ANGLE = 20;
 
 // ---- Which PCA9685 channels have servos plugged in ----
 const uint8_t SERVO_CHANNELS[] = {1, 2, 3};

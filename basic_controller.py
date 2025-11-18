@@ -17,9 +17,9 @@ class BasicPIDController:
         with open(config_file, 'r') as f:
             self.config = json.load(f)
         # PID gains (controlled by sliders in GUI)
-        self.Kp = [0.206, 0.144, 0.206]
-        self.Ki = [0.123, 0.123, 0.144]
-        self.Kd = [0.062, 0.041, 0.041]
+        self.Kp = [0.267, 0.267, 0.267]
+        self.Ki = [0.082, 0.082, 0.082]
+        self.Kd = [0.226, 0.226, 0.226]
         # Scale factor for converting from pixels to meters
         self.scale_factor = self.config['calibration']['pixel_to_meter_ratio'] * self.config['camera']['frame_width'] / 2
         # Servo port name and center angle
@@ -42,7 +42,7 @@ class BasicPIDController:
 
         self.active_motors = [True, False, False] # Store the active motors
         self.ctrl_motor_idx = 0
-        self.mult = [-1, 1, -1] # Some motors are positive in the wrong direction (probably cause of camera)
+        self.mult = [-1, -1, -1] # Some motors are positive in the wrong direction (probably cause of camera)
         
 
     def connect_servo(self):
@@ -60,7 +60,7 @@ class BasicPIDController:
         """Send angle command to servo motor (clipped for safety)."""
         if self.servo:
             servo_angle = self.neutral_angle + angle
-            servo_angle = int(np.clip(servo_angle, -10, 30))
+            servo_angle = int(np.clip(servo_angle, 0, 30))
             try:
                 self.servo.write(f"{channel} {servo_angle}\n".encode("ascii"))
             except Exception:
@@ -69,7 +69,8 @@ class BasicPIDController:
     def update_pid(self, position, motor_idx, dt=0.033):
         """Perform PID calculation and return control output."""
         error = self.setpoint[motor_idx] - position  # Compute error
-        error = error * 100  # Scale error for easier tuning (if needed)
+        error = (error * 100)  if abs(error) >= 0.02 else 0 # Scale error for easier tuning (if needed)
+        #print(error)
         # Proportional term
         P = self.Kp[motor_idx] * error
         # Integral term accumulation
@@ -81,8 +82,8 @@ class BasicPIDController:
         self.prev_error[motor_idx] = error
         # PID output (limit to safe beam range)
         output = P + I + D
-        output = np.clip(output, -30, 30)
-        print(error)
+        output = np.clip(output, -20, 20)
+        #print(error)
         return output
 
     def camera_thread(self):
@@ -99,9 +100,9 @@ class BasicPIDController:
             if found:
                 # Convert normalized to meters using scale
                 position_m = [0, 0, 0]
-                position_m[0] = pos_m1_normalized * self.scale_factor * self.mult[0]
-                position_m[1] = -pos_m2_normalized * self.scale_factor * self.mult[1]
-                position_m[2] = pos_m3_normalized * self.scale_factor * self.mult[2]
+                position_m[0] = round(pos_m1_normalized * self.scale_factor * self.mult[0], 3)
+                position_m[1] = round(pos_m2_normalized * self.scale_factor * self.mult[1], 3)
+                position_m[2] = round(pos_m3_normalized * self.scale_factor * self.mult[2], 3)
                 # Always keep latest measurement only
                 try:
                     for motor_idx in range(3):
@@ -109,7 +110,7 @@ class BasicPIDController:
                             if self.position_queue[motor_idx].full():
                                 self.position_queue[motor_idx].get_nowait()
                             self.position_queue[motor_idx].put_nowait(position_m[motor_idx])
-                            print(f"Motor {motor_idx + 1}: {position_m[motor_idx]}")
+                            #print(f"Motor {motor_idx + 1}: {position_m[motor_idx]}")
                 except Exception:
                     pass
             # Show processed video with overlays
@@ -133,6 +134,7 @@ class BasicPIDController:
                         position = self.position_queue[motor_idx].get(timeout=0.1)
                         # Compute control output using PID
                         control_output = self.update_pid(position, motor_idx)
+                        #control_output = control_output/np.clip(self.active_motors.count(True), 1, 3)
                         # Send control command to servo (real or simulated)
                         self.send_servo_angle(control_output, motor_idx + 1)
                         # Log results for plotting
@@ -176,7 +178,7 @@ class BasicPIDController:
         # Kp slider
         ttk.Label(self.root, text="Kp (Proportional)", font=("Arial", 12)).pack()
         self.kp_var = tk.DoubleVar(value=self.Kp[ctrl_m])
-        kp_slider = ttk.Scale(self.root, from_=0, to=10, variable=self.kp_var,
+        kp_slider = ttk.Scale(self.root, from_=0, to=1, variable=self.kp_var,
                               orient=tk.HORIZONTAL, length=500)
         kp_slider.pack(pady=5)
         self.kp_label = ttk.Label(self.root, text=f"Kp: {self.Kp[ctrl_m]:.1f}", font=("Arial", 11))
@@ -185,7 +187,7 @@ class BasicPIDController:
         # Ki slider
         ttk.Label(self.root, text="Ki (Integral)", font=("Arial", 12)).pack()
         self.ki_var = tk.DoubleVar(value=self.Ki[ctrl_m])
-        ki_slider = ttk.Scale(self.root, from_=0, to=5, variable=self.ki_var,
+        ki_slider = ttk.Scale(self.root, from_=0, to=1, variable=self.ki_var,
                               orient=tk.HORIZONTAL, length=500)
         ki_slider.pack(pady=5)
         self.ki_label = ttk.Label(self.root, text=f"Ki: {self.Ki[ctrl_m]:.1f}", font=("Arial", 11))
@@ -194,7 +196,7 @@ class BasicPIDController:
         # Kd slider
         ttk.Label(self.root, text="Kd (Derivative)", font=("Arial", 12)).pack()
         self.kd_var = tk.DoubleVar(value=self.Kd[ctrl_m])
-        kd_slider = ttk.Scale(self.root, from_=0, to=10, variable=self.kd_var,
+        kd_slider = ttk.Scale(self.root, from_=0, to=1, variable=self.kd_var,
                               orient=tk.HORIZONTAL, length=500)
         kd_slider.pack(pady=5)
         self.kd_label = ttk.Label(self.root, text=f"Kd: {self.Kd[ctrl_m]:.1f}", font=("Arial", 11))
@@ -248,14 +250,21 @@ class BasicPIDController:
     def update_gui(self):
         """Reflect latest values from sliders into program and update display."""
         if self.running:
+            # Controlled motor
+            init_ctrl_m = self.ctrl_motor_idx
+            self.ctrl_motor_idx = self.ctrl_m_var.get()
             ctrl_m = self.ctrl_motor_idx
             # PID parameters
-            self.Kp[ctrl_m] = self.kp_var.get()
-            self.Ki[ctrl_m] = self.ki_var.get()
-            self.Kd[ctrl_m] = self.kd_var.get()
-            self.setpoint[ctrl_m] = self.setpoint_var.get()
-            # Controlled motor
-            self.ctrl_motor_idx = self.ctrl_m_var.get()
+            if init_ctrl_m == ctrl_m:
+                self.Kp[ctrl_m] = self.kp_var.get()
+                self.Ki[ctrl_m] = self.ki_var.get()
+                self.Kd[ctrl_m] = self.kd_var.get()
+                self.setpoint[ctrl_m] = self.setpoint_var.get()
+            else:
+                self.kp_var.set(self.Kp[ctrl_m])
+                self.ki_var.set(self.Ki[ctrl_m])
+                self.kd_var.set(self.Kd[ctrl_m])
+                self.setpoint_var.set(self.setpoint[ctrl_m])
             # Active motors
             self.active_motors[0] = self.act_m1_var.get()
             self.active_motors[1] = self.act_m2_var.get()

@@ -43,7 +43,7 @@ class SimpleAutoCalibrator:
         # Servo hardware configuration
         self.servo = None  # Serial connection to servo
         self.servo_port = "COM3"  # Servo communication port
-        self.neutral_angle = 15  # Servo neutral position angle
+        self.neutral_angle = 20  # Servo neutral position angle
         
         # Position limit results
         self.position_min = None  # Minimum ball position in meters
@@ -72,7 +72,7 @@ class SimpleAutoCalibrator:
         """
         if self.servo:
             # Clip angle to safe range and send as byte
-            angle = int(np.clip(angle, -10, 30))
+            angle = int(np.clip(angle, 0, 40))
             self.servo.write(f"{1} {angle}\n".encode("ascii"))
             # self.servo.write(bytes([angle]))
 
