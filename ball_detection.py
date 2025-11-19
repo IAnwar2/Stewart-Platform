@@ -134,9 +134,9 @@ class BallDetector:
         unit_vector_m3_x = relative_p3[0] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2)
         unit_vector_m3_y = relative_p3[1] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2) 
 
-        pos_along_m1 = normalized_x * unit_vector_m1_x + normalized_y * unit_vector_m1_y
-        pos_along_m2 = normalized_x * unit_vector_m2_x + normalized_y * unit_vector_m2_y
-        pos_along_m3 = normalized_x * unit_vector_m3_x + normalized_y * unit_vector_m3_y
+        pos_along_m1 = -(normalized_x * unit_vector_m1_x + normalized_y * unit_vector_m1_y) * self.scale_factor
+        pos_along_m2 = (normalized_x * unit_vector_m2_x + normalized_y * unit_vector_m2_y) * self.scale_factor
+        pos_along_m3 = (normalized_x * unit_vector_m3_x + normalized_y * unit_vector_m3_y) * self.scale_factor
 
         return True, (int(x), int(y)), radius, pos_along_m1, pos_along_m2, pos_along_m3
 

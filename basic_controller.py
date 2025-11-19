@@ -18,9 +18,9 @@ class BasicPIDController:
         with open(config_file, 'r') as f:
             self.config = json.load(f)
         # PID gains (controlled by sliders in GUI)
-        self.Kp = [0.267, 0.267, 0.267]
-        self.Ki = [0.082, 0.082, 0.082]
-        self.Kd = [0.226, 0.226, 0.226]
+        self.Kp = [16.049, 16.049, 16.049]
+        self.Ki = [6.379, 6.379, 6.379]
+        self.Kd = [7.160, 7.160, 7.160]
         # Scale factor for converting from pixels to meters
         self.scale_factor = self.config['calibration']['pixel_to_meter_ratio'] * self.config['camera']['frame_width'] / 2
         # Servo port name and center angle
@@ -43,8 +43,8 @@ class BasicPIDController:
 
         self.active_motors = [1, 1, 1] # Store the active motors
         self.ctrl_motor_idx = 0
-        self.mult = [-1, -1, -1] # Some motors are positive in the wrong direction (probably cause of camera)
-        
+        self.ctrl_all = 0
+
         # Geometry
         self.center = np.array(self.config['geometry']['center'])
         self.p1 = np.array(self.config['geometry']['motor_1_pos'])
@@ -76,7 +76,11 @@ class BasicPIDController:
     def update_pid(self, position, motor_idx, dt=0.033):
         """Perform PID calculation and return control output."""
         error = self.setpoint[motor_idx] - position  # Compute error
-        error = (error * 100)  if abs(error) >= 0.08 else 0 # Scale error for easier tuning (if needed)
+        # Create dead band
+        if abs(error) < 0.1:
+            error = (error ** 6) / (0.1 ** 5)
+        elif abs(error) < 0.08:
+            error = 0
         #print(error)
         # Proportional term
         P = self.Kp[motor_idx] * error
@@ -106,18 +110,18 @@ class BasicPIDController:
                 continue
             #frame = cv2.resize(frame, (320, 240))
             cv2.circle(frame, self.setpoint_xy, 8, (0, 255, 0), -1)
-            # cv2.circle(frame, self.p1, 2, (0, 255, 0), -1)
-            # cv2.circle(frame, self.p2, 2, (0, 255, 0), -1)
-            # cv2.circle(frame, self.p3, 2, (0, 255, 0), -1)
+            cv2.circle(frame, self.p1, 2, (0, 255, 0), -1)
+            cv2.circle(frame, self.p2, 2, (0, 255, 0), -1)
+            cv2.circle(frame, self.p3, 2, (0, 255, 0), -1)
 
             # Detect ball position in frame
             found, pos_m1_normalized, pos_m2_normalized, pos_m3_normalized, vis_frame = detect_ball_x(frame)
             if found:
                 # Convert normalized to meters using scale
                 position_m = [0, 0, 0]
-                position_m[0] = round(pos_m1_normalized * self.scale_factor * self.mult[0], 3)
-                position_m[1] = round(pos_m2_normalized * self.scale_factor * self.mult[1], 3)
-                position_m[2] = round(pos_m3_normalized * self.scale_factor * self.mult[2], 3)
+                position_m[0] = round(pos_m1_normalized, 3)
+                position_m[1] = round(pos_m2_normalized, 3)
+                position_m[2] = round(pos_m3_normalized, 3)
                 # Always keep latest measurement only
                 try:
                     for motor_idx in range(3):
@@ -165,9 +169,9 @@ class BasicPIDController:
             unit_vector_m3_x = relative_p3[0] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2)
             unit_vector_m3_y = relative_p3[1] / math.sqrt(relative_p3[0] ** 2 + relative_p3[1] ** 2)
 
-            pos_along_m1 = normalized_x * unit_vector_m1_x + normalized_y * unit_vector_m1_y
-            pos_along_m2 = normalized_x * unit_vector_m2_x + normalized_y * unit_vector_m2_y
-            pos_along_m3 = normalized_x * unit_vector_m3_x + normalized_y * unit_vector_m3_y
+            pos_along_m1 = (normalized_x * unit_vector_m1_x + normalized_y * unit_vector_m1_y) * self.scale_factor
+            pos_along_m2 = (normalized_x * unit_vector_m2_x + normalized_y * unit_vector_m2_y) * self.scale_factor
+            pos_along_m3 = (normalized_x * unit_vector_m3_x + normalized_y * unit_vector_m3_y) * self.scale_factor
 
             self.setpoint = [-pos_along_m1, -pos_along_m2, -pos_along_m3]
 
@@ -184,7 +188,7 @@ class BasicPIDController:
                         position = self.position_queue[motor_idx].get(timeout=0.1)
                         # Compute control output using PID
                         control_output = self.update_pid(position, motor_idx)
-                        control_output = control_output/np.clip(self.active_motors.count(True), 1, 3)
+                        control_output = control_output/np.clip(self.active_motors.count(True), 1, 2)
                         # Send control command to servo (real or simulated)
                         self.send_servo_angle(control_output, motor_idx + 1)
                         # Log results for plotting
@@ -228,7 +232,7 @@ class BasicPIDController:
         # Kp slider
         ttk.Label(self.root, text="Kp (Proportional)", font=("Arial", 12)).pack()
         self.kp_var = tk.DoubleVar(value=self.Kp[ctrl_m])
-        kp_slider = ttk.Scale(self.root, from_=0, to=1, variable=self.kp_var,
+        kp_slider = ttk.Scale(self.root, from_=0, to=100, variable=self.kp_var,
                               orient=tk.HORIZONTAL, length=500)
         kp_slider.pack(pady=5)
         self.kp_label = ttk.Label(self.root, text=f"Kp: {self.Kp[ctrl_m]:.1f}", font=("Arial", 11))
@@ -237,7 +241,7 @@ class BasicPIDController:
         # Ki slider
         ttk.Label(self.root, text="Ki (Integral)", font=("Arial", 12)).pack()
         self.ki_var = tk.DoubleVar(value=self.Ki[ctrl_m])
-        ki_slider = ttk.Scale(self.root, from_=0, to=1, variable=self.ki_var,
+        ki_slider = ttk.Scale(self.root, from_=0, to=10, variable=self.ki_var,
                               orient=tk.HORIZONTAL, length=500)
         ki_slider.pack(pady=5)
         self.ki_label = ttk.Label(self.root, text=f"Ki: {self.Ki[ctrl_m]:.1f}", font=("Arial", 11))
@@ -246,7 +250,7 @@ class BasicPIDController:
         # Kd slider
         ttk.Label(self.root, text="Kd (Derivative)", font=("Arial", 12)).pack()
         self.kd_var = tk.DoubleVar(value=self.Kd[ctrl_m])
-        kd_slider = ttk.Scale(self.root, from_=0, to=1, variable=self.kd_var,
+        kd_slider = ttk.Scale(self.root, from_=0, to=10, variable=self.kd_var,
                               orient=tk.HORIZONTAL, length=500)
         kd_slider.pack(pady=5)
         self.kd_label = ttk.Label(self.root, text=f"Kd: {self.Kd[ctrl_m]:.1f}", font=("Arial", 11))
@@ -254,8 +258,8 @@ class BasicPIDController:
 
         # Setpoint slider
         ttk.Label(self.root, text="Setpoint (meters)", font=("Arial", 12)).pack()
-        pos_min = self.config['calibration']['position_min_m']
-        pos_max = self.config['calibration']['position_max_m']
+        #pos_min = self.config['calibration']['position_min_m']
+        #pos_max = self.config['calibration']['position_max_m']
         #self.setpoint_var = tk.DoubleVar(value=self.setpoint[ctrl_m])
         # setpoint_slider = ttk.Scale(self.root, from_=pos_min, to=pos_max,
         #                            variable=self.setpoint_var,
@@ -273,6 +277,8 @@ class BasicPIDController:
                    command=self.plot_results).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Stop",
                    command=self.stop).pack(side=tk.LEFT, padx=5)
+        self.ctrl_all_var = tk.IntVar(value=self.ctrl_all)
+        ttk.Checkbutton(button_frame, text="Cntrl All", variable=self.ctrl_all_var).pack(side=tk.LEFT, padx=5)
 
         # Control motor
         ttk.Label(self.root, text="Controlled Motor", font=("Arial", 10)).pack()
@@ -304,17 +310,23 @@ class BasicPIDController:
             init_ctrl_m = self.ctrl_motor_idx
             self.ctrl_motor_idx = self.ctrl_m_var.get()
             ctrl_m = self.ctrl_motor_idx
+            self.ctrl_all = self.ctrl_all_var.get()
             # PID parameters
-            if init_ctrl_m == ctrl_m:
+            if self.ctrl_all:
+                kp_var = self.kp_var.get()
+                ki_var = self.ki_var.get()
+                kd_var = self.kd_var.get()
+                self.Kp = [kp_var, kp_var, kp_var]
+                self.Ki = [ki_var, ki_var, ki_var]
+                self.Kd = [kd_var, kd_var, kd_var]
+            elif init_ctrl_m == ctrl_m:
                 self.Kp[ctrl_m] = self.kp_var.get()
                 self.Ki[ctrl_m] = self.ki_var.get()
                 self.Kd[ctrl_m] = self.kd_var.get()
-                #self.setpoint[ctrl_m] = self.setpoint_var.get()
             else:
                 self.kp_var.set(self.Kp[ctrl_m])
                 self.ki_var.set(self.Ki[ctrl_m])
                 self.kd_var.set(self.Kd[ctrl_m])
-                #self.setpoint_var.set(self.setpoint[ctrl_m])
             # Active motors
             self.active_motors[0] = self.act_m1_var.get()
             self.active_motors[1] = self.act_m2_var.get()
