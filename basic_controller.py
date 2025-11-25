@@ -16,10 +16,21 @@ class BasicPIDController:
         # Load experiment and hardware config from JSON file
         with open(config_file, 'r') as f:
             self.config = json.load(f)
-        # PID gains (controlled by sliders in GUI)
-        self.Kp = [0.206, 0.144, 0.206]
-        self.Ki = [0.123, 0.123, 0.144]
-        self.Kd = [0.062, 0.041, 0.041]
+        # PID gains - TWO SETS for different error ranges
+        # Coarse mode (large errors, far from setpoint): fast response, less oscillation
+        self.Kp_coarse = [0.35, 0.35, 0.35]
+        self.Ki_coarse = [0.05, 0.05, 0.05]
+        self.Kd_coarse = [0.15, 0.15, 0.15]
+        # Fine mode (small errors, near setpoint): precise convergence
+        self.Kp_fine = [0.25, 0.25, 0.25]
+        self.Ki_fine = [0.12, 0.12, 0.12]
+        self.Kd_fine = [0.20, 0.20, 0.20]
+        # Current operating gains (controlled by sliders in GUI)
+        self.Kp = [0.25, 0.25, 0.25]
+        self.Ki = [0.12, 0.12, 0.12]
+        self.Kd = [0.20, 0.20, 0.20]
+        # Error threshold for switching between coarse and fine modes
+        self.error_threshold = 0.05  # meters (5 cm)
         # Scale factor for converting from pixels to meters
         self.scale_factor = self.config['calibration']['pixel_to_meter_ratio'] * self.config['camera']['frame_width'] / 2
         # Servo port name and center angle
@@ -30,11 +41,17 @@ class BasicPIDController:
         self.setpoint = [0.0, 0.0, 0.0]
         self.integral = [0.0, 0.0, 0.0]
         self.prev_error = [0.0, 0.0, 0.0]
+        self.prev_position = [0.0, 0.0, 0.0]  # For low-pass filtering derivative
+        self.derivative_filtered = [0.0, 0.0, 0.0]  # Filtered derivative
+        # Anti-windup limits for integral
+        self.integral_max = [0.5, 0.5, 0.5]
+        self.integral_min = [-0.5, -0.5, -0.5]
         # Data logs for plotting results
         self.time_log = [[], [], []]
         self.position_log = [[], [], []]
         self.setpoint_log = [[], [], []]
         self.control_log = [[], [], []]
+        self.mode_log = [[], [], []]  # Track which mode was used
         self.start_time = None
         # Thread-safe queue for most recent ball position measurement
         self.position_queue = [queue.Queue(maxsize=1), queue.Queue(maxsize=1), queue.Queue(maxsize=1)]
@@ -72,50 +89,56 @@ class BasicPIDController:
             except Exception:
                 print("[SERVO] Send failed")
 
-    def update_pid(self, position, motor_idx, dt):
-        """Perform PID calculation using provided dt and return control output.
-
-        Includes simple anti-windup (clamp integral) and uses stored previous error.
-        """
-        # Guard dt
-        if dt is None or dt <= 0:
-            dt = 0.033
-
-        # compute error (scale to make tuning comparable to previous behavior)
-        error = (self.setpoint[motor_idx] - position) * 100.0
-
-        # Proportional
-        P = self.Kp[motor_idx] * error
-
-        # Integral (accumulate but clamp to prevent windup)
+    def update_pid(self, position, motor_idx, dt=0.033):
+        """Perform adaptive PID calculation with two gain sets and anti-windup."""
+        error = self.setpoint[motor_idx] - position
+        abs_error = abs(error)
+        
+        # Adaptive gain selection based on error magnitude
+        if abs_error > self.error_threshold:
+            # Coarse mode: large errors, aggressive response
+            Kp = self.Kp_coarse[motor_idx]
+            Ki = self.Ki_coarse[motor_idx]
+            Kd = self.Kd_coarse[motor_idx]
+            mode = 1  # Coarse mode indicator
+        else:
+            # Fine mode: small errors, precise convergence
+            Kp = self.Kp_fine[motor_idx]
+            Ki = self.Ki_fine[motor_idx]
+            Kd = self.Kd_fine[motor_idx]
+            mode = 0  # Fine mode indicator
+        
+        # Proportional term
+        P = Kp * error
+        
+        # Integral term with anti-windup
         self.integral[motor_idx] += error * dt
-        # clamp integral
-        lim = self.integral_limits[motor_idx]
-        if self.integral[motor_idx] > lim:
-            self.integral[motor_idx] = lim
-        elif self.integral[motor_idx] < -lim:
-            self.integral[motor_idx] = -lim
-        I = self.Ki[motor_idx] * self.integral[motor_idx]
-
-        # Derivative (protect against dt==0)
-        derivative = (error - self.prev_error[motor_idx]) / dt
-        D = self.Kd[motor_idx] * derivative
+        # Clamp integral to prevent windup
+        self.integral[motor_idx] = np.clip(
+            self.integral[motor_idx], 
+            self.integral_min[motor_idx], 
+            self.integral_max[motor_idx]
+        )
+        I = Ki * self.integral[motor_idx]
+        
+        # Derivative term with first-order low-pass filter
+        # Reduces noise sensitivity while maintaining responsiveness
+        raw_derivative = (error - self.prev_error[motor_idx]) / dt
+        alpha = 0.3  # Filter coefficient (0-1), lower = more filtering
+        self.derivative_filtered[motor_idx] = (
+            alpha * raw_derivative + 
+            (1 - alpha) * self.derivative_filtered[motor_idx]
+        )
+        D = Kd * self.derivative_filtered[motor_idx]
+        
         self.prev_error[motor_idx] = error
-
-        # raw PID output
-        output_unclipped = P + I + D
-
-        # clip final output
-        output = np.clip(output_unclipped, -30.0, 30.0)
-
-        # Simple anti-windup: if clipped, reduce integral slightly to avoid long-term saturation
-        if output != output_unclipped:
-            # back-off factor (small) to slowly unwind integrator
-            self.integral[motor_idx] *= 0.9
-
-        # debug print of scaled error occasionally
-        # print(f"[PID] m{motor_idx+1} err={error:.2f} P={P:.2f} I={I:.2f} D={D:.2f} out={output:.2f}")
-        return float(output)
+        self.prev_position[motor_idx] = position
+        
+        # PID output (limit to safe beam range)
+        output = P + I + D
+        output = np.clip(output, -20, 20)
+        
+        return output, mode
 
     def camera_thread(self):
         """Dedicated thread for video capture and ball detection."""
@@ -185,43 +208,32 @@ class BasicPIDController:
                 raw_outputs = [0.0, 0.0, 0.0]
                 for motor_idx in range(3):
                     if self.active_motors[motor_idx]:
-                        raw_outputs[motor_idx] = self.update_pid(positions[motor_idx], motor_idx, dt)
-                    else:
-                        raw_outputs[motor_idx] = 0.0
-
-                # Simple coordination/decoupling step:
-                # remove mean of active outputs to reduce net rotation (simple heuristic)
-                active_indices = [i for i in range(3) if self.active_motors[i]]
-                if len(active_indices) > 0:
-                    mean_active = float(np.mean([raw_outputs[i] for i in active_indices]))
-                    coordinated_outputs = raw_outputs.copy()
-                    for i in active_indices:
-                        coordinated_outputs[i] = float(np.clip(raw_outputs[i] - mean_active, -30.0, 30.0))
-                else:
-                    coordinated_outputs = raw_outputs
-
-                # send commands and log
-                current_time = time.time() - self.start_time
-                for motor_idx in range(3):
-                    if self.active_motors[motor_idx]:
-                        out = coordinated_outputs[motor_idx]
-                        self.send_servo_angle(out, motor_idx + 1)
+                        # Wait for latest ball position from camera
+                        position = self.position_queue[motor_idx].get(timeout=0.1)
+                        # Compute control output using adaptive PID
+                        control_output, mode = self.update_pid(position, motor_idx)
+                        control_output = control_output/np.clip(self.active_motors.count(True), 1, 3)
+                        # Send control command to servo (real or simulated)
+                        self.send_servo_angle(control_output, motor_idx + 1)
+                        # Log results for plotting
+                        current_time = time.time() - self.start_time
                         self.time_log[motor_idx].append(current_time)
                         self.position_log[motor_idx].append(positions[motor_idx])
                         self.setpoint_log[motor_idx].append(self.setpoint[motor_idx])
-                        self.control_log[motor_idx].append(out)
-                        # minimal console logging
-                        print(f"Motor {motor_idx + 1} Pos: {positions[motor_idx]:.3f}m, Out: {out:.1f}°")
-                    else:
-                        # make sure inactive motors are commanded to neutral
+                        self.control_log[motor_idx].append(control_output)
+                        self.mode_log[motor_idx].append(mode)
+                        mode_str = "COARSE" if mode else "FINE"
+                        error = self.setpoint[motor_idx] - position
+                        print(f"Motor {motor_idx + 1} [{mode_str}] Pos: {position:.3f}m, Error: {error:.3f}m, Output: {control_output:.1f}°")
+                    else: # Set inactive to neutral angle
                         self.send_servo_angle(0, motor_idx + 1)
                         self.time_log[motor_idx].append(current_time)
                         self.position_log[motor_idx].append(0)
                         self.setpoint_log[motor_idx].append(self.setpoint[motor_idx])
                         self.control_log[motor_idx].append(0)
-
-                # small sleep to avoid busy loop if camera is slow
-                time.sleep(0.01)
+                        self.mode_log[motor_idx].append(-1)
+            except queue.Empty:
+                continue
             except Exception as e:
                 print(f"[CONTROL] Error: {e}")
                 break
@@ -344,27 +356,56 @@ class BasicPIDController:
         print("[RESET] Integral term reset")
 
     def plot_results(self):
-        """Show matplotlib plots of position and control logs."""
-        if not self.time_log:
+        """Show matplotlib plots of position, control, and mode logs."""
+        if not self.time_log[0]:
             print("[PLOT] No data to plot")
             return
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10))
         ctrl_m = self.ctrl_motor_idx
+        
         # Ball position trace
-        ax1.plot(self.time_log[ctrl_m], self.position_log[ctrl_m], label="Ball Position", linewidth=2)
+        ax1.plot(self.time_log[ctrl_m], self.position_log[ctrl_m], label="Ball Position", linewidth=2, marker='o', markersize=3)
         ax1.plot(self.time_log[ctrl_m], self.setpoint_log[ctrl_m], label="Setpoint",
                  linestyle="--", linewidth=2)
         ax1.set_ylabel("Position (m)")
-        ax1.set_title(f"Basic PID Control (Kp={self.Kp[ctrl_m]:.1f}, Ki={self.Ki[ctrl_m]:.1f}, Kd={self.Kd[ctrl_m]:.1f})")
+        ax1.set_title(f"Adaptive PID Control - Motor {ctrl_m + 1}")
         ax1.legend()
         ax1.grid(True, alpha=0.3)
+        
         # Control output trace
         ax2.plot(self.time_log[ctrl_m], self.control_log[ctrl_m], label="Control Output",
                  color="orange", linewidth=2)
-        ax2.set_xlabel("Time (s)")
         ax2.set_ylabel("Platform Angle (degrees)")
         ax2.legend()
         ax2.grid(True, alpha=0.3)
+        
+        # Mode switching trace (coarse vs fine)
+        coarse_times = []
+        coarse_positions = []
+        fine_times = []
+        fine_positions = []
+        
+        for i, mode in enumerate(self.mode_log[ctrl_m]):
+            if mode == 1:  # Coarse mode
+                coarse_times.append(self.time_log[ctrl_m][i])
+                coarse_positions.append(self.position_log[ctrl_m][i])
+            elif mode == 0:  # Fine mode
+                fine_times.append(self.time_log[ctrl_m][i])
+                fine_positions.append(self.position_log[ctrl_m][i])
+        
+        if coarse_times:
+            ax3.scatter(coarse_times, coarse_positions, label="Coarse Mode (|error| > 5cm)", 
+                       color='red', s=30, alpha=0.6)
+        if fine_times:
+            ax3.scatter(fine_times, fine_positions, label="Fine Mode (|error| ≤ 5cm)", 
+                       color='green', s=30, alpha=0.6)
+        
+        ax3.set_xlabel("Time (s)")
+        ax3.set_ylabel("Position (m)")
+        ax3.set_title("PID Control Mode")
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
         plt.tight_layout()
         plt.show()
 
