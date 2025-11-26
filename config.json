@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-11-19T11:45:50.731160",
+  "timestamp": "2025-11-25T21:13:17.500737",
   "platform_diameter_m": 0.3,
   "camera": {
     "index": 1,
@@ -8,20 +8,20 @@
   },
   "ball_detection": {
     "lower_hsv": [
-      8.0,
-      155.0,
-      201.0
+      5.0,
+      229.0,
+      108.0
     ],
     "upper_hsv": [
-      21.0,
-      217.0,
-      255.0
+      25.0,
+      255.0,
+      179.0
     ]
   },
   "calibration": {
-    "pixel_to_meter_ratio": 0.000564766774973609,
-    "position_min_m": -0.13310981265959304,
-    "position_max_m": 0.1567795045805644
+    "pixel_to_meter_ratio": 0.0004908360995579561,
+    "position_min_m": -0.1400371987646809,
+    "position_max_m": 0.14365679237015644
   },
   "servo": {
     "port": "COM3",
@@ -29,20 +29,20 @@
   },
   "geometry": {
     "center": [
-      269,
-      277
+      311,
+      293
     ],
     "motor_1_pos": [
-      498,
-      412
+      277,
+      2
     ],
     "motor_2_pos": [
-      270,
-      10
+      55,
+      473
     ],
     "motor_3_pos": [
-      41,
-      410
+      601,
+      405
     ]
   }
 }

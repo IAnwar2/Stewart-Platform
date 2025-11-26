@@ -51,6 +51,8 @@ class BasicPIDController:
         self.p2 = np.array(self.config['geometry']['motor_2_pos'])
         self.p3 = np.array(self.config['geometry']['motor_3_pos'])
         self.setpoint_xy = self.center
+        self.trunc_m = 0.07 # distance before truncation begins
+        self.flat_m = 0.005 # *affects distance where PID values are zero
 
     def connect_servo(self):
         """Try to open serial connection to servo, return True if success."""
@@ -76,26 +78,48 @@ class BasicPIDController:
     def update_pid(self, position, motor_idx, dt=0.033):
         """Perform PID calculation and return control output."""
         error = self.setpoint[motor_idx] - position  # Compute error
-        # Create dead band
-        if abs(error) < 0.1:
-            error = (error ** 6) / (0.1 ** 5)
-        elif abs(error) < 0.08:
-            error = 0
-        #print(error)
+        # Reduce PID values as it approaches the centre
+        # Kp
+        Kp = self.deadbanding(error, self.Kp[motor_idx]) #if abs(error) > 0.01 else 0
+        # Ki
+        Ki = self.rising(error, self.Ki[motor_idx]) #if abs(error) > 0.01 else 0
+        # Kd
+        Kd = self.rising(error, self.Kd[motor_idx]) #if abs(error) > 0.01 else 0
+        print (Kp, Ki, Kd)
         # Proportional term
-        P = self.Kp[motor_idx] * error
+        P = Kp * error
         # Integral term accumulation
         self.integral[motor_idx] += error * dt
-        I = self.Ki[motor_idx] * self.integral[motor_idx]
+        I = Ki * self.integral[motor_idx]
         # Derivative term calculation
         derivative = (error - self.prev_error[motor_idx]) / dt
-        D = self.Kd[motor_idx] * derivative
+        D = Kd * derivative
         self.prev_error[motor_idx] = error
         # PID output (limit to safe beam range)
         output = P + I + D
         output = np.clip(output, -20, 20)
         #print(error)
         return output
+    
+    def deadbanding(self, error, k):
+        a = self.trunc_m
+        b = self.flat_m
+        x = abs(error)
+
+        result = k
+        result += np.heaviside(a-x, 0) * (k/(a-b)*(x-b)-k)
+        result += np.heaviside(b-x, 0) * (k/(a-b)*(b-x))
+        return result
+    
+    def rising(self, error, k):
+        a = self.trunc_m
+        b = self.flat_m
+        x = abs(error)
+
+        result = k
+        result += np.heaviside(a-x, 0) * (k/(a-b)*(b-x)+k)
+        result += np.heaviside(b-x, 0) * (k/(a-b)*(x-b))
+        return result
 
     def camera_thread(self):
         """Dedicated thread for video capture and ball detection."""
@@ -119,9 +143,9 @@ class BasicPIDController:
             if found:
                 # Convert normalized to meters using scale
                 position_m = [0, 0, 0]
-                position_m[0] = round(pos_m1_normalized, 3)
-                position_m[1] = round(pos_m2_normalized, 3)
-                position_m[2] = round(pos_m3_normalized, 3)
+                position_m[0] = round(pos_m1_normalized, 10)
+                position_m[1] = round(pos_m2_normalized, 10)
+                position_m[2] = round(pos_m3_normalized, 10)
                 # Always keep latest measurement only
                 try:
                     for motor_idx in range(3):
@@ -188,7 +212,7 @@ class BasicPIDController:
                         position = self.position_queue[motor_idx].get(timeout=0.1)
                         # Compute control output using PID
                         control_output = self.update_pid(position, motor_idx)
-                        control_output = control_output/np.clip(self.active_motors.count(True), 1, 2)
+                        #control_output = control_output/np.clip(self.active_motors.count(True), 1, 2)
                         # Send control command to servo (real or simulated)
                         self.send_servo_angle(control_output, motor_idx + 1)
                         # Log results for plotting
@@ -341,7 +365,9 @@ class BasicPIDController:
 
     def reset_integral(self):
         """Clear integral error in PID (button handler)."""
-        self.integral[self.ctrl_motor_idx] = 0.0
+        self.integral[0] = 0.0
+        self.integral[1] = 0.0
+        self.integral[2] = 0.0
         print("[RESET] Integral term reset")
 
     def plot_results(self):
