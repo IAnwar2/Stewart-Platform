@@ -24,7 +24,7 @@ class SimpleAutoCalibrator:
         self.center = None
         
         # Camera configuration
-        self.CAM_INDEX = 1  # Default camera index
+        self.CAM_INDEX = 0  # Default camera index
         self.FRAME_W, self.FRAME_H = 640, 480  # Frame dimensions
         
         # Calibration state tracking
@@ -43,7 +43,7 @@ class SimpleAutoCalibrator:
         # Servo hardware configuration
         self.servo = None  # Serial connection to servo
         self.servo_port = "COM3"  # Servo communication port
-        self.neutral_angle = 15  # Servo neutral position angle
+        self.neutral_angle = 20  # Servo neutral position angle
         
         # Position limit results
         self.position_min = None  # Minimum ball position in meters
@@ -59,10 +59,14 @@ class SimpleAutoCalibrator:
             self.servo = serial.Serial(self.servo_port, 9600)
             time.sleep(2)  # Allow time for connection to stabilize
             print("[SERVO] Connected")
+            self.servo.write(f"{1} {self.neutral_angle}\n".encode("ascii"))
+            self.servo.write(f"{2} {self.neutral_angle}\n".encode("ascii"))
+            self.servo.write(f"{3} {self.neutral_angle}\n".encode("ascii"))
             return True
         except:
             print("[SERVO] Failed to connect - limits will be estimated")
             return False
+        
 
     def send_servo_angle(self, angle):
         """Send angle command to servo motor with safety clipping.
@@ -72,7 +76,7 @@ class SimpleAutoCalibrator:
         """
         if self.servo:
             # Clip angle to safe range and send as byte
-            angle = int(np.clip(angle, -10, 30))
+            angle = int(np.clip(angle, 0, 40))
             self.servo.write(f"{1} {angle}\n".encode("ascii"))
             # self.servo.write(bytes([angle]))
 
@@ -118,27 +122,38 @@ class SimpleAutoCalibrator:
         
         # Update HSV bounds based on collected samples
         if self.hsv_samples:
-            samples = np.array(self.hsv_samples)
-            
-            # Calculate adaptive margins for each HSV channel
-            h_margin = max(5, (np.max(samples[:, 0]) - np.min(samples[:, 0])) * 0.1)
-            s_margin = max(10, (np.max(samples[:, 1]) - np.min(samples[:, 1])) * 0.15)
-            v_margin = max(10, (np.max(samples[:, 2]) - np.min(samples[:, 2])) * 0.15)
-            
-            # Set lower bounds with margin
-            self.lower_hsv = [
-                max(0, np.min(samples[:, 0]) - h_margin),
-                max(0, np.min(samples[:, 1]) - s_margin),
-                max(0, np.min(samples[:, 2]) - v_margin)
-            ]
-            
-            # Set upper bounds with margin
-            self.upper_hsv = [
-                min(179, np.max(samples[:, 0]) + h_margin),
-                min(255, np.max(samples[:, 1]) + s_margin),
-                min(255, np.max(samples[:, 2]) + v_margin)
-            ]
-            
+            # Cast to signed integer to avoid uint8 wrap/overflow during arithmetic
+            samples = np.array(self.hsv_samples, dtype=np.int16)
+
+            # Compute ranges per channel using safe integer arithmetic
+            h_min = int(np.min(samples[:, 0]))
+            h_max = int(np.max(samples[:, 0]))
+            s_min = int(np.min(samples[:, 1]))
+            s_max = int(np.max(samples[:, 1]))
+            v_min = int(np.min(samples[:, 2]))
+            v_max = int(np.max(samples[:, 2]))
+
+            # Calculate adaptive margins for each HSV channel (rounded to int)
+            h_margin = int(max(5, round((h_max - h_min) * 0.1)))
+            s_margin = int(max(10, round((s_max - s_min) * 0.15)))
+            v_margin = int(max(10, round((v_max - v_min) * 0.15)))
+
+            # Set lower/upper bounds with margin and clip to valid ranges
+            lower_h = int(np.clip(h_min - h_margin, 0, 179))
+            upper_h = int(np.clip(h_max + h_margin, 0, 179))
+
+            lower_s = int(np.clip(s_min - s_margin, 0, 255))
+            upper_s = int(np.clip(s_max + s_margin, 0, 255))
+
+            lower_v = int(np.clip(v_min - v_margin, 0, 255))
+            upper_v = int(np.clip(v_max + v_margin, 0, 255))
+
+            self.lower_hsv = [lower_h, lower_s, lower_v]
+            self.upper_hsv = [upper_h, upper_s, upper_v]
+
+            # Note: this prevents arithmetic overflow from uint8. If your hue
+            # samples can straddle the 0/179 boundary (e.g. near 179 and 0),
+            # consider using circular hue handling (not implemented here).
             print(f"[COLOR] Samples: {len(self.hsv_samples)}")
 
     def calculate_geometry(self):
@@ -255,7 +270,7 @@ class SimpleAutoCalibrator:
         positions = []
         
         # Test servo at different angles to find position range
-        test_angles = [self.neutral_angle - 25, self.neutral_angle, self.neutral_angle + 15]
+        test_angles = [self.neutral_angle - 20, self.neutral_angle, self.neutral_angle + 20]
         
         for angle in test_angles:
             # Move servo to test angle

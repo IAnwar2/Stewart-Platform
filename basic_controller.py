@@ -18,15 +18,15 @@ class BasicPIDController:
             self.config = json.load(f)
         # PID gains - TWO SETS for different error ranges
         # Coarse mode (large errors, far from setpoint): fast response, less oscillation
-        self.Kp_coarse = [0.35, 0.35, 0.35]
+        self.Kp_coarse = [0.40, 0.40, 0.40]
         self.Ki_coarse = [0.05, 0.05, 0.05]
         self.Kd_coarse = [0.15, 0.15, 0.15]
         # Fine mode (small errors, near setpoint): precise convergence
-        self.Kp_fine = [0.25, 0.25, 0.25]
+        self.Kp_fine = [0.35, 0.35, 0.35]
         self.Ki_fine = [0.12, 0.12, 0.12]
         self.Kd_fine = [0.20, 0.20, 0.20]
         # Current operating gains (controlled by sliders in GUI)
-        self.Kp = [0.25, 0.25, 0.25]
+        self.Kp = [0.35, 0.35, 0.35]
         self.Ki = [0.12, 0.12, 0.12]
         self.Kd = [0.20, 0.20, 0.20]
         # Error threshold for switching between coarse and fine modes
@@ -135,7 +135,7 @@ class BasicPIDController:
         self.prev_position[motor_idx] = position
         
         # PID output (limit to safe beam range)
-        output = P + I + D
+        output = 100*(P + I + D)
         output = np.clip(output, -20, 20)
         
         return output, mode
@@ -258,7 +258,7 @@ class BasicPIDController:
         # Kp slider
         ttk.Label(self.root, text="Kp (Proportional)", font=("Arial", 12)).pack()
         self.kp_var = tk.DoubleVar(value=self.Kp[ctrl_m])
-        kp_slider = ttk.Scale(self.root, from_=0, to=10, variable=self.kp_var,
+        kp_slider = ttk.Scale(self.root, from_=0, to=1, variable=self.kp_var,
                               orient=tk.HORIZONTAL, length=500)
         kp_slider.pack(pady=5)
         self.kp_label = ttk.Label(self.root, text=f"Kp: {self.Kp[ctrl_m]:.1f}", font=("Arial", 11))
